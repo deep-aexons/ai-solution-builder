@@ -2,7 +2,7 @@
 # Examples of what the checks target: eval/exec, raw SQL formatting, secrets.
 #
 # deny_commands: regexes (case-insensitive, dot matches newline) searched in Bash
-# commands while a solution is active. This is a guardrail, not a sandbox.
+# commands (and their quote-stripped form) while a solution is active. This is a guardrail, not a sandbox.
 deny_commands:
   # rm with both a recursive and a force flag, in any form or order
   - '\brm\b(?=[^;|&\n]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))(?=[^;|&\n]*\s(?:-[a-z]*f[a-z]*|--force)(?:\s|$))'
@@ -19,20 +19,21 @@ deny_commands:
   # anything touching the .asb folder (active solution, manifest anchors)
   - '(?<![\w.])\.asb(?![\w.-])'
   # protected files together with a write-ish shell operator
-  - '\A(?=.*(?:status\.json|audit\.log|exceptions\.yaml|\.asb-manifest\.json))(?=.*(?:(?<!\d)>(?!&)|\btee\b|\bsed\b[^\n]*\s-[a-z]*i|\bmv\b|\bcp\b|\brm\b|\btruncate\b))'
+  - '\A(?=.*(?:status\.json|audit\.log|exceptions\.yaml|\.asb-manifest\.json))(?=.*(?:(?<!\d)>(?!&)|\btee\b|\bsed\b[^\n]*\s(?:-[a-z]*i|--in-place)|\bmv\b|\bcp\b|\bln\b|\bdd\b|\brm\b|\btruncate\b))'
 checks:
   - EVAL
   - RAW_SQL
   - SECRET
   - NO_PERMISSION
   - HEADER_TAMPERED
-# Directories never walked (dependencies, VCS data).
+# Paths (relative to the app folder, anchored) never walked: dependencies, VCS data.
+# The same names elsewhere in the app are walked and scanned.
 ignore_paths:
-  - "**/node_modules/**"
-  - "**/.git/**"
+  - "frontend/node_modules/**"
+  - ".git/**"
 # Non-Python files under these paths, not listed in the generator manifest, are build
 # output and are not scanned.
 build_output:
-  - "**/dist/**"
+  - "frontend/dist/**"
 # Exemptions that apply only to files listed in the generator manifest (packs add here).
 skip_paths: []

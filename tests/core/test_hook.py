@@ -241,6 +241,11 @@ def test_notebook_cannot_touch_protected(project):
 @pytest.mark.parametrize(
     "cmd",
     [
+        'rm "-rf" x',
+        "rm '-r' '-f' x",
+        "ln -sf x solutions/gate-pass/status.json",
+        "dd if=x of=solutions/gate-pass/audit.log",
+        "sed --in-place s/a/b/ solutions/gate-pass/exceptions.yaml",
         "rm -r -f x",
         "rm -f -r x",
         "rm -rf x",

@@ -43,7 +43,7 @@ DEFAULT_DENY = [
     "\\basb\\s+(approve|use)\\b",
     "-m\\s+asb\\b.*\\b(approve|use)\\b",
     "(?<![\\w.])\\.asb(?![\\w.-])",
-    "\\A(?=.*(?:status\\.json|audit\\.log|exceptions\\.yaml|\\.asb-manifest\\.json))(?=.*(?:(?<!\\d)>(?!&)|\\btee\\b|\\bsed\\b[^\\n]*\\s-[a-z]*i|\\bmv\\b|\\bcp\\b|\\brm\\b|\\btruncate\\b))",
+    "\\A(?=.*(?:status\\.json|audit\\.log|exceptions\\.yaml|\\.asb-manifest\\.json))(?=.*(?:(?<!\\d)>(?!&)|\\btee\\b|\\bsed\\b[^\\n]*\\s(?:-[a-z]*i|--in-place)|\\bmv\\b|\\bcp\\b|\\bln\\b|\\bdd\\b|\\brm\\b|\\btruncate\\b))",
 ]
 
 
@@ -113,9 +113,13 @@ def check_bash(data: dict) -> None:
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str):
         return
+    # Also match with quotes removed so that `rm "-rf" x` does not slip through.
+    variants = (command, command.replace("'", "").replace('"', ""))
     for pattern in deny_patterns():
         try:
-            hit = re.search(pattern, command, re.IGNORECASE | re.DOTALL)
+            hit = any(
+                re.search(pattern, v, re.IGNORECASE | re.DOTALL) for v in variants
+            )
         except (re.error, TypeError):
             print(f"warning: invalid deny pattern {pattern!r} ignored", file=sys.stderr)
             continue

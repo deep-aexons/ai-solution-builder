@@ -30,7 +30,7 @@ ALLOW_SECRET_MARKER = "asb: allow-secret"
 ALL_CHECKS = ("EVAL", "RAW_SQL", "SECRET", "NO_PERMISSION", "HEADER_TAMPERED")
 CORE_POLICY = Path(__file__).resolve().parents[2] / "policy" / "policy.yaml"
 # Walked-around directories when the policy has no `ignore_paths`.
-_DEFAULT_IGNORE = ["**/node_modules/**", "**/.git/**"]
+_DEFAULT_IGNORE = ["frontend/node_modules/**", ".git/**"]
 _PACK_NAME = re.compile(r"[a-z][a-z0-9_-]*")
 _SCANNED = {".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".yml", ".yaml"}
 _QUOTED_ONLY = {".py", ".ts", ".tsx", ".js", ".jsx", ".json"}
@@ -177,20 +177,58 @@ def _is_env_file(name: str) -> bool:
 _DANGEROUS_BUILTINS = ("eval", "exec", "compile")
 
 
-def _bound_names(tree: ast.AST) -> set[str]:
-    """Names bound by an import or a def/class anywhere in the module."""
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                names.add((alias.asname or alias.name).split(".")[0])
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-    return names
+def _module_bindings(tree: ast.Module) -> tuple[set[str], dict[str, str], set[str]]:
+    """Module-level bindings: (shadowing names, aliases of builtins, builtins-module names).
+
+    Only module-level statements count (not names bound inside functions or classes).
+    Importing from or aliasing the `builtins` module does not shadow the builtins.
+    """
+    shadow: set[str] = set()
+    aliases: dict[str, str] = {}
+    modules = {"builtins", "__builtins__"}
+
+    def visit(body: list[ast.stmt]) -> None:
+        for node in body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    bound = (alias.asname or alias.name).split(".")[0]
+                    if alias.name == "builtins":
+                        modules.add(bound)
+                    else:
+                        shadow.add(bound)
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    bound = alias.asname or alias.name
+                    if node.module == "builtins" and node.level == 0:
+                        if alias.name in _DANGEROUS_BUILTINS:
+                            aliases[bound] = alias.name
+                    else:
+                        shadow.add(bound)
+            elif isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                shadow.add(node.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                shadow.update(t.id for t in targets if isinstance(t, ast.Name))
+            elif isinstance(node, ast.If | ast.With | ast.AsyncWith):
+                visit(node.body)
+                visit(getattr(node, "orelse", []))
+            elif isinstance(node, ast.Try):
+                visit(node.body)
+                visit(node.orelse)
+                visit(node.finalbody)
+                for handler in node.handlers:
+                    visit(handler.body)
+
+    visit(tree.body)
+    return shadow, aliases, modules
 
 
-def _eval_issues(tree: ast.AST, rel: str) -> list[tuple[int, Issue]]:
-    shadowed = _bound_names(tree)
+def _eval_issues(tree: ast.Module, rel: str) -> list[tuple[int, Issue]]:
+    shadowed, aliases, modules = _module_bindings(tree)
     out = []
 
     def add(node: ast.AST, what: str) -> None:
@@ -201,15 +239,17 @@ def _eval_issues(tree: ast.AST, rel: str) -> list[tuple[int, Issue]]:
         if (
             isinstance(node, ast.Name)
             and isinstance(node.ctx, ast.Load)
-            and node.id in _DANGEROUS_BUILTINS
             and node.id not in shadowed
         ):
-            add(node, f"{node.id}()")
+            if node.id in _DANGEROUS_BUILTINS:
+                add(node, f"{node.id}()")
+            elif node.id in aliases:
+                add(node, f"{aliases[node.id]}() (as {node.id})")
         elif (
             isinstance(node, ast.Attribute)
             and node.attr in _DANGEROUS_BUILTINS
             and isinstance(node.value, ast.Name)
-            and node.value.id in ("builtins", "__builtins__")
+            and node.value.id in modules
         ):
             add(node, f"builtins.{node.attr}()")
     return out
@@ -423,7 +463,7 @@ def _pattern_checks(
         found: list[tuple[int, Issue]] = []
         if suffix == ".py":
             try:
-                tree: ast.AST | None = ast.parse(text, filename=rel)
+                tree: ast.Module | None = ast.parse(text, filename=rel)
             except (SyntaxError, ValueError) as exc:
                 issues.append(Issue("PARSE_ERROR", rel, f"cannot parse: {exc}"))
                 tree = None
