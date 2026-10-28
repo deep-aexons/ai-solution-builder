@@ -51,8 +51,7 @@ def test_load_sidecar_pack():
 
 def test_pack_methods_proxy_to_module():
     pack = load_pack(REPO, "sidecar-django")
-    with pytest.raises(NotImplementedError, match="later task"):
-        pack.generate(None, Path("."))
+    assert pack.module.generate.__module__ == "asb_sidecar.generate"
     with pytest.raises(NotImplementedError, match="later task"):
         pack.verify(None, Path("."))
 

@@ -1,8 +1,8 @@
-"""Sidecar pack entry point; real generation and verification arrive in later tasks."""
+"""Sidecar pack entry point; verification arrives in a later task."""
 
+from .generate import generate
 
-def generate(solution, solution_dir):
-    raise NotImplementedError("implemented in a later task")
+__all__ = ["generate", "verify"]
 
 
 def verify(solution, solution_dir):
