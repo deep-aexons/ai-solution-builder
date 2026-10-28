@@ -45,9 +45,11 @@ def _pytest(backend: Path, *args: str) -> subprocess.CompletedProcess:
 
 def _counts(out: str) -> dict[str, int]:
     """Counts from pytest's final summary line, e.g. '2 failed, 38 passed, 1 error in 3s'."""
-    last = [
+    lines = [
         ln for ln in out.splitlines() if re.search(r"\d+ (passed|failed|error)", ln)
-    ][-1]
+    ]
+    assert lines, f"no pytest summary line found in:\n{out}"
+    last = lines[-1]
     found = {
         w: int(n)
         for n, w in re.findall(
@@ -187,3 +189,31 @@ def test_linked_entities_are_fully_exercised(tmp_path):
             assert re.search(rf"clerk-{entity}-{perm}\] PASSED", text), (entity, perm)
     assert "approver-purchase_order-approve] PASSED" in text
     assert "viewer-purchase_order-update] PASSED" in text
+
+
+def test_required_link_cycle_via_second_link_is_tagged_not_recursed(tmp_path):
+    data = {
+        "solution": "cyc",
+        "version": 1,
+        "description": "Required link cycle through a second link.",
+        "entities": [
+            {"name": "a", "label": "A", "fields": [
+                {"name": "x", "type": "link", "to": ["c"], "required": True},
+                {"name": "y", "type": "link", "to": ["b"], "required": True},
+            ]},
+            {"name": "b", "label": "B", "fields": [
+                {"name": "back", "type": "link", "to": ["a"], "required": True},
+            ]},
+            {"name": "c", "label": "C", "fields": [{"name": "t", "type": "text"}]},
+        ],
+        "roles": {"r": {"a": ["create", "read"], "b": ["read"], "c": ["read", "create"]}},
+        "acceptance_tests": [],
+    }  # fmt: skip
+    from asb.model import Solution
+
+    generate(Solution.model_validate(data), tmp_path)
+    proc = _pytest(tmp_path / "app/backend", "tests", "-m", "not at", "-rs")
+    out = proc.stdout
+    assert proc.returncode == 0, out
+    assert "sample-incomplete: a: required link cycle a -> b -> a" in out, out
+    assert "RecursionError" not in out

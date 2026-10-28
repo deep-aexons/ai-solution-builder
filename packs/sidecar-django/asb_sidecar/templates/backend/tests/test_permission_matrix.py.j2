@@ -34,8 +34,8 @@ def test_permission(role, entity, perm, api, samples, make_user, rules_noop):
         want = has(role, entity, "read")
         resp = client.get(url(entity))
         assert resp.status_code == (200 if want else 403), resp.content
-        if want and samples.complete(entity):
-            obj, _ = samples.make(entity)
+        if want:
+            obj, _ = samples.make(entity)  # skips with "sample-incomplete:" when it cannot
             assert client.get(url(entity, f"{obj.pk}/")).status_code == 200
     elif perm == "update":
         want = has(role, entity, "update")

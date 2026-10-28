@@ -80,26 +80,25 @@ def _needed(solution: Solution, e: Entity) -> set[str]:
 
 
 def _link_cycle(solution: Solution, start: str) -> list[str] | None:
-    """Path of required links from `start` that revisits an entity, if any."""
+    """A path of required links (all of them, depth first) from `start` that revisits an
+    entity on the path, if any."""
     by_name = {e.name: e for e in solution.entities}
-    path = [start]
-    while True:
+
+    def walk(path: list[str]) -> list[str] | None:
         entity = by_name.get(path[-1])
         if entity is None:
             return None
-        nxt = next(
-            (
-                f.to[0]
-                for f in entity.fields
-                if f.type == "link" and f.required and f.to
-            ),
-            None,
-        )
-        if nxt is None:
-            return None
-        if nxt in path:
-            return [*path, nxt]
-        path.append(nxt)
+        for f in entity.fields:
+            if f.type == "link" and f.required and f.to:
+                for target in f.to:
+                    if target in path:
+                        return [*path, target]
+                    found = walk([*path, target])
+                    if found:
+                        return found
+        return None
+
+    return walk([start])
 
 
 def _spec(solution: Solution, e: Entity, depth: int = 0) -> dict[str, Any]:
