@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 import yaml
@@ -54,7 +54,6 @@ class ERPNextConnector:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.url = url.rstrip("/")
-        self._auth = f"token {api_key}:{api_secret}"
         self.allowed_writes = set(allowed_writes)
         self._sleep = sleep
         self._kinds: dict[str, str] = dict(_MAPPING["kinds"])
@@ -62,11 +61,18 @@ class ERPNextConnector:
             int(k): v for k, v in _MAPPING["states"]["docstatus"].items()
         }
         self._http = httpx.Client(
-            timeout=timeout, transport=transport, headers={"Authorization": self._auth}
+            timeout=timeout,
+            transport=transport,
+            headers={"Authorization": f"token {api_key}:{api_secret}"},
         )
 
     def __repr__(self) -> str:
-        return f"ERPNextConnector(url={self.url!r})"
+        parts = urlsplit(self.url)
+        host = parts.hostname or ""
+        if parts.port:
+            host = f"{host}:{parts.port}"
+        shown = urlunsplit((parts.scheme, host, parts.path, "", ""))
+        return f"ERPNextConnector(url={shown!r})"
 
     @classmethod
     def from_env(
@@ -91,9 +97,23 @@ class ERPNextConnector:
             ) from None
 
     def _with_state(self, record: dict[str, Any]) -> dict[str, Any]:
-        if "docstatus" in record and record["docstatus"] is not None:
-            record["_state"] = self._states.get(int(record["docstatus"]), "unknown")
+        if record.get("docstatus") is not None:
+            try:
+                record["_state"] = self._states.get(int(record["docstatus"]), "unknown")
+            except (TypeError, ValueError):
+                raise ConnectorError(
+                    f"unexpected ERPNext response: bad docstatus {record['docstatus']!r}"
+                ) from None
         return record
+
+    @staticmethod
+    def _data(body: Any, expected: type) -> Any:
+        data = body.get("data", None) if isinstance(body, dict) else None
+        if not isinstance(data, expected):
+            raise ConnectorError(
+                f"unexpected ERPNext response: expected {expected.__name__} under 'data'"
+            )
+        return data
 
     def _request(self, method: str, path: str, **kw: Any) -> Any:
         url = f"{self.url}{path}"
@@ -140,6 +160,8 @@ class ERPNextConnector:
                 "GET", "/api/method/frappe.utils.change_log.get_versions"
             )
             version = str(body["message"]["frappe"]["version"])
+        except AuthFailed:
+            raise
         except (ConnectorError, KeyError, TypeError):
             version = "unknown"
         kinds: dict[str, Any] = {}
@@ -152,16 +174,20 @@ class ERPNextConnector:
                 )
                 fields = [f["fieldname"] for f in body["message"]["docs"][0]["fields"]]
                 kinds[kind] = {"doctype": doctype, "fields": fields}
+            except AuthFailed:
+                raise
             except (ConnectorError, KeyError, IndexError, TypeError) as exc:
                 kinds[kind] = {"doctype": doctype, "fields": [], "error": str(exc)}
         return {"version": version, "kinds": kinds}
 
     def get(self, kind: str, id: str) -> dict[str, Any]:
         doctype = self._doctype(kind)
+        if not isinstance(id, str) or id.strip() in ("", ".", ".."):
+            raise ConnectorError(f"invalid document id {id!r}")
         body = self._request(
             "GET", f"/api/resource/{quote(doctype)}/{quote(id, safe='')}"
         )
-        return self._with_state(dict(body["data"]))
+        return self._with_state(dict(self._data(body, dict)))
 
     def list(
         self,
@@ -179,7 +205,10 @@ class ERPNextConnector:
             "limit_page_length": limit,
         }
         body = self._request("GET", f"/api/resource/{quote(doctype)}", params=params)
-        return [self._with_state(dict(row)) for row in body["data"]]
+        rows = self._data(body, list)
+        if not all(isinstance(r, dict) for r in rows):
+            raise ConnectorError("unexpected ERPNext response: rows must be objects")
+        return [self._with_state(dict(row)) for row in rows]
 
     def create_draft(self, kind: str, data: dict[str, Any]) -> dict[str, Any]:
         doctype = self._doctype(kind)
@@ -189,4 +218,4 @@ class ERPNextConnector:
             )
         payload = {k: v for k, v in data.items() if k not in ("docstatus", "name")}
         body = self._request("POST", f"/api/resource/{quote(doctype)}", json=payload)
-        return self._with_state(dict(body["data"]))
+        return self._with_state(dict(self._data(body, dict)))

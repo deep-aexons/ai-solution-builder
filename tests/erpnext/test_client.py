@@ -253,3 +253,114 @@ def test_from_env(monkeypatch):
     monkeypatch.setenv("ASB_ERP_API_SECRET", "s")
     assert isinstance(from_env(), ERPNextConnector)
     assert isinstance(ERPNextConnector.from_env(), ERPNextConnector)
+
+
+# -- fix round 1 ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "body", [{}, {"data": None}, {"data": []}, {"data": "x"}, [1], {"message": {}}]
+)
+def test_get_unexpected_shape(body):
+    with pytest.raises(ConnectorError, match="unexpected ERPNext response"):
+        make(lambda r: httpx.Response(200, json=body)).get("item", "x")
+
+
+@pytest.mark.parametrize("body", [{}, {"data": {}}, {"data": [1]}, {"data": None}])
+def test_list_unexpected_shape(body):
+    with pytest.raises(ConnectorError, match="unexpected ERPNext response"):
+        make(lambda r: httpx.Response(200, json=body)).list("item")
+
+
+def test_create_unexpected_shape():
+    c = make(lambda r: httpx.Response(200, json={}), allowed_writes={"write:item"})
+    with pytest.raises(ConnectorError, match="unexpected ERPNext response"):
+        c.create_draft("item", {})
+
+
+def test_non_integer_docstatus():
+    h = lambda r: httpx.Response(200, json={"data": {"docstatus": "abc"}})
+    with pytest.raises(ConnectorError, match="unexpected ERPNext response"):
+        make(h).get("item", "x")
+    h = lambda r: httpx.Response(200, json={"data": [{"docstatus": [1]}]})
+    with pytest.raises(ConnectorError, match="unexpected ERPNext response"):
+        make(h).list("item")
+
+
+@pytest.mark.parametrize("bad", ["", ".", "..", "  "])
+def test_get_rejects_bad_ids_without_request(bad):
+    calls = []
+    c = make(lambda r: calls.append(r) or httpx.Response(200, json={"data": {}}))
+    with pytest.raises(ConnectorError, match="invalid document id"):
+        c.get("item", bad)
+    assert calls == []
+
+
+def _counting(calls, exc=None, status=None):
+    def h(req):
+        calls.append(1)
+        if exc:
+            raise exc("boom")
+        return httpx.Response(status)
+
+    return h
+
+
+@pytest.mark.parametrize("exc", [httpx.ReadTimeout, httpx.ConnectTimeout])
+def test_get_retried_on_timeouts(exc):
+    calls = []
+    with pytest.raises(Unavailable):
+        make(_counting(calls, exc=exc)).get("item", "x")
+    assert len(calls) == 3
+
+
+def test_get_retried_on_429():
+    calls = []
+    with pytest.raises(Unavailable):
+        make(_counting(calls, status=429)).get("item", "x")
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("exc", [httpx.ReadTimeout, httpx.ConnectTimeout])
+def test_post_not_retried_on_timeouts(exc):
+    calls = []
+    c = make(_counting(calls, exc=exc), allowed_writes={"write:item"})
+    with pytest.raises(Unavailable):
+        c.create_draft("item", {})
+    assert len(calls) == 1
+
+
+def test_post_not_retried_on_429():
+    calls = []
+    c = make(_counting(calls, status=429), allowed_writes={"write:item"})
+    with pytest.raises(ConnectorError):
+        c.create_draft("item", {})
+    assert len(calls) == 1
+
+
+def test_401_not_retried():
+    calls = []
+    with pytest.raises(AuthFailed):
+        make(_counting(calls, status=401)).get("item", "x")
+    assert len(calls) == 1
+
+
+def test_repr_strips_userinfo_and_no_token_attribute():
+    c = ERPNextConnector("http://user:pw@erp.test:8000/", "key", "sekret")
+    r = repr(c)
+    assert "pw" not in r and "user" not in r and "sekret" not in r
+    assert "erp.test:8000" in r
+    assert not any("sekret" in str(v) for v in vars(c).values() if isinstance(v, str))
+
+
+def test_inspect_reraises_auth_failed():
+    with pytest.raises(AuthFailed):
+        make(lambda r: httpx.Response(401)).inspect()
+
+    def h(req):
+        if req.url.path.endswith("get_versions"):
+            return httpx.Response(200, json={"message": {"frappe": {"version": "1"}}})
+        return httpx.Response(403)
+
+    with pytest.raises(AuthFailed):
+        make(h).inspect()
