@@ -152,7 +152,7 @@ Mapping (`mapping.yaml`): `outbound_shipment: Delivery Note`, `inbound_receipt: 
 
 **Files:** Create `packs/sidecar-django/asb_sidecar/generate.py`, `templates/backend/` (`manage.py.j2`, `config/settings.py.j2`, `config/urls.py.j2`, `entities/models.py.j2`, `requirements.txt.j2`), `tests/sidecar/test_generate_models.py`, golden files `tests/sidecar/golden/models.py`.
 
-**Interfaces:** Consumes Solution, Pack. Produces `generate(solution, solution_dir) -> GenerateResult` writing into `solution_dir/app/`. Type mapping: text→CharField(255) (TextField if `extensions.sidecar-django.long_text`), number→IntegerField, decimal→DecimalField(18,6), money→DecimalField(18,2), date→DateField, datetime→DateTimeField, choice→CharField(choices), boolean→BooleanField, attachment→FileField, link→ForeignKey(PROTECT), external_ref→two fields `<name>_kind` (CharField with choices of `to`) + `<name>_id` (CharField 140), table→child model with ForeignKey(parent, CASCADE, related_name=<field name>). Every entity with a workflow gets `state` CharField (choices = states, default initial); numbering via `number` CharField unique, assigned on first save from pattern (`{YYYY}`, `{#####}` zero-padded per-year counter). Settings: `DATABASE_URL` env (postgres) else SQLite `db.sqlite3`; `SECRET_KEY` from env with a dev default only when `DEBUG=1`.
+**Interfaces:** Consumes Solution, Pack. Produces `generate(solution, solution_dir) -> GenerateResult` writing into `solution_dir/app/`. Type mapping: text→CharField(255) (TextField if `extensions.sidecar-django.long_text`), number→IntegerField, decimal→DecimalField(18,6), money→DecimalField(18,2), date→DateField, datetime→DateTimeField, choice→CharField(choices), boolean→BooleanField, attachment→FileField, link→ForeignKey(PROTECT), external_ref→two fields `<name>_kind` (CharField with choices of `to`) + `<name>_id` (CharField 140), table→child model with ForeignKey(parent, CASCADE, related_name=<field name>). Every entity with a workflow gets `state` CharField (choices = states, default initial); numbering via `number` CharField unique, assigned on first save from pattern (`{YYYY}`, `{#####}` zero-padded per-year counter). Every run writes `app/.asb-manifest.json` (generated path → sha256) used by `asb check`. Settings: `DATABASE_URL` env (postgres) else SQLite `db.sqlite3`; `SECRET_KEY` from env with a dev default only when `DEBUG=1`.
 
 - [ ] **Step 1: Failing tests:** golden comparison for gate_pass `entities/models.py`; generated app passes `python manage.py makemigrations --check --dry-run` after `makemigrations` (run via `uv run --with django==5.2.*`); number assigned `GP-<year>-00001` then `00002`.
 - [ ] **Step 2–4:** implement with Jinja2 (`StrictUndefined`), write headers, run `makemigrations` from the generator so migrations are generator-owned.
@@ -162,7 +162,7 @@ Mapping (`mapping.yaml`): `outbound_shipment: Delivery Note`, `inbound_receipt: 
 
 **Files:** Add templates `workflow/engine.py.j2`, `workflow/definitions.py.j2`, `api/permissions.py.j2`, `api/views.py.j2`, `api/serializers.py.j2`, `api/meta.py.j2`, `config/roles.py.j2` (management command `asb_sync_roles` creating Django groups); tests `tests/sidecar/test_generated_api.py` (generate into tmp, run its Django test client in-process).
 
-**Interfaces:** Generated app exposes: `GET/POST /api/<entity>/`, `GET/PATCH /api/<entity>/<id>/`, `POST /api/<entity>/<id>/transition/` body `{"action": str, ...required fields}`, `GET /api/meta/` (entities, fields, workflow, current user's roles and allowed actions), `GET /api/reports/<name>/?filters`. Engine: `apply_transition(obj, action, user, data) -> obj` raising `TransitionDenied(reason)`; records `TransitionLog(entity, object_id, from_state, to_state, action, user, at, data)`. Permissions: role = Django group; `update_own_draft` = update allowed only when `state == initial` and `created_by == user`; objects get `created_by`, `created_at`, `modified_at`. Unauthenticated → 401/403; denied → 403 with message; validation → 400.
+**Interfaces:** Generated app exposes: `GET/POST /api/<entity>/`, `GET/PATCH /api/<entity>/<id>/`, `POST /api/<entity>/<id>/transition/` body `{"action": str, ...required fields}`, `GET /api/meta/` (entities, fields, workflow, current user's roles and allowed actions), `POST /api/auth/login/` `{username,password}` → session cookie + CSRF token, `POST /api/auth/logout/`, `GET /api/reports/<name>/?filters`. Engine: `apply_transition(obj, action, user, data) -> obj` raising `TransitionDenied(reason)`; records `TransitionLog(entity, object_id, from_state, to_state, action, user, at, data)`. Permissions: role = Django group; `update_own_draft` = update allowed only when `state == initial` and `created_by == user`; objects get `created_by`, `created_at`, `modified_at`. Unauthenticated → 401/403; denied → 403 with message; validation → 400.
 
 - [ ] **Step 1: Failing tests** for gate_pass: store_user can create and submit; store_user approve → 403; security approve → 200 and log row; reject without `reason` → 400; manager cannot create; `/api/meta/` lists allowed actions per role.
 - [ ] **Step 2–4:** implement templates; PASS.
@@ -182,23 +182,13 @@ Mapping (`mapping.yaml`): `outbound_shipment: Delivery Note`, `inbound_receipt: 
 
 **Files:** `templates/frontend/` (static Vite React TS app: `package.json`, `src/main.tsx`, `src/api.ts`, `src/pages/List.tsx`, `Form.tsx`, `Report.tsx`, `Login.tsx`), `templates/docker-compose.yml.j2`, `templates/Dockerfile.j2`, `templates/README.md.j2`; test `tests/sidecar/test_frontend.py`.
 
-**Interfaces:** Frontend reads `/api/meta/` and renders list/form/transition buttons/reports for any entity; session auth via `/api/auth/login/` (add view in Task 8 templates if missing: `POST {username,password}` → session cookie + CSRF). Compose services `db` (postgres:16), `app` (gunicorn + built frontend served by WhiteNoise).
+**Interfaces:** Frontend reads `/api/meta/` and renders list/form/transition buttons/reports for any entity; session auth via `/api/auth/login/` from Task 8. Compose services `db` (postgres:16), `app` (gunicorn + built frontend served by WhiteNoise).
 
 - [ ] **Step 1: Failing test:** generated `frontend/` runs `npm install && npm run build` successfully (mark slow; skip if no network); compose file parses and references `DATABASE_URL`.
 - [ ] **Step 2–4:** implement; PASS. Compose run itself is `@pytest.mark.compose`.
 - [ ] **Step 5:** commit `feat(sidecar): React frontend and Docker Compose`.
 
-### Task 11: Sidecar verifier and `asb verify`
-
-**Files:** `packs/sidecar-django/asb_sidecar/verify.py`; modify `cli.py` (`build`, `verify`); test `tests/sidecar/test_verify.py`, fixtures: a deliberately broken generated app (rule missing, AT not mapped).
-
-**Interfaces:** `verify(solution, solution_dir) -> VerifyResult` with checks in order: `acceptance_mapping` (every AT id has a test marked `@pytest.mark.at("<id>")`), `tests` (pytest in app with `DJANGO_SETTINGS_MODULE`, junit xml parsed), `permission_matrix`, `workflow_matrix`, `reports` (each report run on seeded fixture data), `static` (`asb check`), `frontend_build`, `ui_smoke` (skipped with reason if Playwright/browser unavailable). `asb build <name>`: `require("build")` → `pack.generate` → mark build done. `asb verify <name>`: `require("verify")` → increments `verify_rounds` → writes `verify-report.md` (table: check, status, details; failures listed with evidence) → marks verify done only if no `fail`.
-
-- [ ] **Step 1: Failing tests:** broken fixture → report has `acceptance_mapping: fail` naming `AT-02`; clean generated gate_pass with test overrides → all pass except `ui_smoke: skipped`; 4th verify → GateError.
-- [ ] **Step 2–4:** implement; PASS.
-- [ ] **Step 5:** commit `feat: verification and verify report`.
-
-### Task 12: `asb check`, core policy and Claude Code hook
+### Task 11: `asb check`, core policy and Claude Code hook
 
 **Files:** `core/tool/asb/checks.py`, `core/policy/policy.yaml`, `core/policy/hook.py`, `hooks/hooks.json`; tests `tests/core/test_checks.py`, `tests/core/test_hook.py`.
 
@@ -207,6 +197,16 @@ Mapping (`mapping.yaml`): `outbound_shipment: Delivery Note`, `inbound_receipt: 
 - [ ] **Step 1: Failing tests:** one per check code with tiny fixture files; manifest mismatch detected; hook denies write to `core/x.py` when active solution is `gate-pass`, allows `solutions/gate-pass/app/x.py`, denies `git push`.
 - [ ] **Step 2–4:** implement; PASS.
 - [ ] **Step 5:** commit `feat: asb check, core policy and PreToolUse hook`.
+
+### Task 12: Sidecar verifier and `asb verify`
+
+**Files:** `packs/sidecar-django/asb_sidecar/verify.py`; modify `cli.py` (`build`, `verify`); test `tests/sidecar/test_verify.py`, fixtures: a deliberately broken generated app (rule missing, AT not mapped).
+
+**Interfaces:** `verify(solution, solution_dir) -> VerifyResult` with checks in order: `acceptance_mapping` (every AT id has a test marked `@pytest.mark.at("<id>")`), `tests` (pytest in app with `DJANGO_SETTINGS_MODULE`, junit xml parsed), `permission_matrix`, `workflow_matrix`, `reports` (each report run on seeded fixture data), `static` (`asb.checks.run_checks` from Task 11), `frontend_build`, `ui_smoke` (skipped with reason if Playwright/browser unavailable). `asb build <name>`: `require("build")` → `pack.generate` → mark build done. `asb verify <name>`: `require("verify")` → increments `verify_rounds` → writes `verify-report.md` (table: check, status, details; failures listed with evidence) → marks verify done only if no `fail`.
+
+- [ ] **Step 1: Failing tests:** broken fixture → report has `acceptance_mapping: fail` naming `AT-02`; clean generated gate_pass with test overrides → all pass except `ui_smoke: skipped`; 4th verify → GateError.
+- [ ] **Step 2–4:** implement; PASS.
+- [ ] **Step 5:** commit `feat: verification and verify report`.
 
 ### Task 13: `asb discover` (basic stage 2)
 
