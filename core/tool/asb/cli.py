@@ -7,6 +7,14 @@ import typer
 
 from asb import __version__
 from asb.model import ModelError, load_solution
+from asb.status import (
+    STAGES,
+    GateError,
+    approve,
+    load_status,
+    new_solution,
+    require,
+)
 from asb.validate import validate
 
 app = typer.Typer(
@@ -63,3 +71,96 @@ def validate_cmd(
             typer.echo(str(issue))
         raise typer.Exit(1)
     typer.echo("OK: no issues")
+
+
+RootOpt = Annotated[
+    Path,
+    typer.Option("--root", help="Project root containing solutions/ (default: cwd)."),
+]
+
+
+def _sol_dir(root: Path | None, name: str) -> Path:
+    path = (root if root is not None else Path.cwd()) / "solutions" / name
+    if not (path / "status.json").is_file():
+        typer.echo(f"error: no solution '{name}' under {path.parent}")
+        raise typer.Exit(1)
+    return path
+
+
+@app.command("new")
+def new_cmd(
+    name: Annotated[str, typer.Argument(help="Solution name (lowercase, hyphens).")],
+    pack: Annotated[str, typer.Option("--pack", help="Target pack name.")],
+    connector: Annotated[
+        str | None, typer.Option("--connector", help="Connector name.")
+    ] = None,
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Create a new client solution folder."""
+    try:
+        path = new_solution(
+            root if root is not None else Path.cwd(), name, pack, connector
+        )
+    except (ValueError, FileExistsError) as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
+    typer.echo(f"created {path}")
+
+
+@app.command("status")
+def status_cmd(
+    name: Annotated[str, typer.Argument(help="Solution name.")],
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Show stages, approvals and fix-loop rounds."""
+    st = load_status(_sol_dir(root, name))
+    typer.echo(f"solution: {st.solution}  pack: {st.pack}  connector: {st.connector}")
+    typer.echo("stages:")
+    for stage in STAGES:
+        typer.echo(f"  {stage:<14}{st.stages.get(stage, 'todo')}")
+    typer.echo("approvals:")
+    if not st.approvals:
+        typer.echo("  (none)")
+    for a in st.approvals:
+        extra = f"  v{a.model_version} {a.model_hash[:12]}" if a.model_hash else ""
+        typer.echo(f"  {a.kind:<14}{a.by}  {a.at.isoformat()}{extra}")
+    typer.echo(f"verify_rounds: {st.verify_rounds}")
+
+
+@app.command("approve")
+def approve_cmd(
+    name: Annotated[str, typer.Argument(help="Solution name.")],
+    kind: Annotated[
+        str, typer.Argument(help="requirements | design | client | golive")
+    ],
+    by: Annotated[str, typer.Option("--by", help="Who approves.")],
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Record an approval."""
+    if kind not in ("requirements", "design", "client", "golive"):
+        typer.echo(f"error: unknown approval kind '{kind}'")
+        raise typer.Exit(1)
+    try:
+        approve(_sol_dir(root, name), kind, by)
+    except GateError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
+    typer.echo(f"approved {kind} by {by}")
+
+
+@app.command("gate")
+def gate_cmd(
+    name: Annotated[str, typer.Argument(help="Solution name.")],
+    stage: Annotated[str, typer.Argument(help="Stage to check.")],
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Check whether a stage may start (exit 1 if refused)."""
+    if stage not in STAGES:
+        typer.echo(f"error: unknown stage '{stage}'")
+        raise typer.Exit(1)
+    try:
+        require(_sol_dir(root, name), stage)
+    except GateError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+    typer.echo("OK")
