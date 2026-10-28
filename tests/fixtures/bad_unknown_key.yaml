@@ -1,0 +1,11 @@
+solution: bad
+version: 1
+description: Has a misspelled field option.
+entities:
+  - name: thing
+    label: Thing
+    fields:
+      - {name: title, type: text}
+      - {name: code, type: text, requird: true}
+roles: {}
+acceptance_tests: []
