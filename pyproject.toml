@@ -44,4 +44,4 @@ markers = [
 
 [tool.ruff]
 src = ["core/tool"]
-extend-exclude = ["tests/sidecar/golden"]
+extend-exclude = ["tests/sidecar/golden", "solutions"]

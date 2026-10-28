@@ -1,0 +1,80 @@
+solution: gate_pass
+version: 1
+description: Gate pass control for goods leaving or entering the premises, checked by security against ERP documents.
+external:
+  - name: delivery_note
+    kind: outbound_shipment
+    access: read
+  - name: purchase_receipt
+    kind: inbound_receipt
+    access: read
+entities:
+  - name: gate_pass
+    label: Gate Pass
+    numbering: "GP-{YYYY}-{#####}"
+    fields:
+      - {name: direction, type: choice, required: true, options: [outbound, inbound]}
+      - {name: delivery_note, type: external_ref, to: [delivery_note]}
+      - {name: purchase_receipt, type: external_ref, to: [purchase_receipt]}
+      - {name: vehicle_no, type: text, required: true, pattern: "^[A-Z0-9 -]+$"}
+      - {name: driver, type: text, required: true}
+      - {name: gate_time, type: datetime}
+      - {name: reason, type: text}
+      - {name: lines, type: table, of: gate_pass_line}
+  - name: gate_pass_line
+    label: Gate Pass Line
+    child_of: gate_pass
+    fields:
+      - {name: item, type: text, required: true}
+      - {name: quantity, type: decimal, required: true, min: 0}
+workflow:
+  entity: gate_pass
+  states: [draft, pending_security, approved, rejected, closed]
+  initial: draft
+  final_states: [rejected, closed]
+  transitions:
+    - {from: draft, to: pending_security, action: submit, roles: [store_user]}
+    - {from: pending_security, to: approved, action: approve, roles: [security]}
+    - {from: pending_security, to: rejected, action: reject, roles: [security], require: [reason]}
+    - {from: approved, to: closed, action: close, roles: [security]}
+roles:
+  store_user:
+    gate_pass: [create, read, update_own_draft]
+    gate_pass_line: [create, read, update_own_draft]
+  security:
+    gate_pass: [read, approve]
+    gate_pass_line: [read]
+    reports: [gate_register]
+  manager:
+    gate_pass: [read, export]
+    gate_pass_line: [read]
+    reports: [gate_register]
+rules:
+  - id: R1
+    text: The referenced delivery note or purchase receipt must be submitted in the ERP.
+  - id: R2
+    text: Pass quantities cannot exceed the quantities on the referenced document.
+reports:
+  - name: gate_register
+    entity: gate_pass
+    filters: [date_range, direction, state]
+    columns: [name, direction, vehicle_no, driver, gate_time, state]
+acceptance_tests:
+  - id: AT-01
+    covers: [R1]
+    text: A gate pass whose referenced document is still a draft in the ERP is refused.
+  - id: AT-02
+    covers: [workflow]
+    text: A store_user cannot approve a pending gate pass; a security user can.
+  - id: AT-03
+    covers: [R2]
+    text: A gate pass line quantity above the referenced quantity is refused.
+  - id: AT-04
+    covers: ["workflow:reject"]
+    text: Rejecting a pending gate pass requires a reason.
+  - id: AT-05
+    covers: [gate_register]
+    text: The gate register can be filtered by direction and date range.
+  - id: AT-06
+    covers: [permissions]
+    text: A manager can read and export gate passes but cannot create or change them.

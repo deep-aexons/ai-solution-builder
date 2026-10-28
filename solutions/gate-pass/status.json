@@ -1,0 +1,30 @@
+{
+  "solution": "gate-pass",
+  "pack": "sidecar-django",
+  "connector": "erpnext",
+  "stages": {
+    "requirements": "done",
+    "discovery": "done",
+    "design": "done",
+    "build": "done",
+    "verify": "done",
+    "release": "todo"
+  },
+  "approvals": [
+    {
+      "kind": "requirements",
+      "by": "Deep (approved design spec §14, 2026-10-28)",
+      "at": "2026-10-28T20:20:26.957000Z",
+      "model_version": null,
+      "model_hash": null
+    },
+    {
+      "kind": "design",
+      "by": "Deep (approved design spec §14, 2026-10-28)",
+      "at": "2026-10-28T20:20:56.707953Z",
+      "model_version": "1",
+      "model_hash": "81f7445bbf0afb35849569b1aee6e38aa9c972ecba32b74da0679b278ab04edb"
+    }
+  ],
+  "verify_rounds": 1
+}

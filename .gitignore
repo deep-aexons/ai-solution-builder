@@ -5,3 +5,8 @@ node_modules/
 .env
 .superpowers/
 .asb/
+solutions/**/app/frontend/node_modules/
+solutions/**/app/frontend/dist/
+solutions/**/app/backend/db.sqlite3
+solutions/**/app/backend/staticfiles/
+solutions/**/__pycache__/

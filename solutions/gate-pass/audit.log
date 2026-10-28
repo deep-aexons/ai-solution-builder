@@ -1,0 +1,13 @@
+2026-10-28T20:20:16Z	new	pack=sidecar-django connector=erpnext
+2026-10-28T20:20:26Z	approve	requirements by Deep (approved design spec §14, 2026-10-28) hash=None
+2026-10-28T20:20:37Z	mark_done	discovery
+2026-10-28T20:20:56Z	approve	design by Deep (approved design spec §14, 2026-10-28) hash=81f7445bbf0afb35849569b1aee6e38aa9c972ecba32b74da0679b278ab04edb
+2026-10-28T20:20:57Z	mark_done	build
+2026-10-28T20:20:57Z	verify_reset	new build
+2026-10-28T20:20:57Z	build	written=65 skipped_ai_owned=0
+2026-10-28T20:22:05Z	check	issues=0
+2026-10-28T20:22:10Z	mark_done	requirements
+2026-10-28T20:22:10Z	mark_done	design
+2026-10-28T20:22:10Z	verify_round	1
+2026-10-28T20:22:35Z	verify	round=1 result=pass pass=8 fail=0
+2026-10-28T20:22:35Z	mark_done	verify
