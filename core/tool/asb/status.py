@@ -59,11 +59,17 @@ def log_event(sol_dir: Path, event: str, detail: str) -> None:
 
 def load_status(sol_dir: Path) -> Status:
     path = Path(sol_dir) / "status.json"
-    if not path.is_file():
-        raise GateError(f"status.json not found: {path}")
     try:
-        return Status.model_validate_json(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValidationError) as exc:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise GateError(f"status.json not found: {path}") from exc
+    except OSError as exc:
+        raise GateError(f"status.json unreadable: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise GateError(f"status.json is corrupt: {exc}") from exc
+    try:
+        return Status.model_validate_json(raw)
+    except ValidationError as exc:
         first = (str(exc).splitlines() or [type(exc).__name__])[0]
         raise GateError(f"status.json is corrupt: {first}") from exc
 

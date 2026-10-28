@@ -216,3 +216,13 @@ def test_missing_status_is_not_corrupt(sol):
     (sol / "status.json").unlink()
     with pytest.raises(GateError, match="status.json not found"):
         load_status(sol)
+
+
+def test_unreadable_and_undecodable_status(sol):
+    (sol / "status.json").write_bytes(b"\xff\xfe\x00bad")
+    with pytest.raises(GateError, match="status.json is corrupt"):
+        load_status(sol)
+    (sol / "status.json").unlink()
+    (sol / "status.json").mkdir()  # a directory: read raises OSError, not missing
+    with pytest.raises(GateError, match="status.json unreadable"):
+        load_status(sol)
