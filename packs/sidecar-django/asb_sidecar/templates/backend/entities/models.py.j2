@@ -7,6 +7,7 @@ from django.core.validators import (  # noqa: F401
     RegexValidator,
 )
 from django.db import models, transaction
+from django.db.models import F
 from django.utils import timezone
 
 
@@ -21,8 +22,8 @@ class NumberSeries(models.Model):
 def _next_sequence(key):
     with transaction.atomic():
         series, _ = NumberSeries.objects.select_for_update().get_or_create(key=key)
-        series.last += 1
-        series.save(update_fields=["last"])
+        NumberSeries.objects.filter(pk=series.pk).update(last=F("last") + 1)
+        series.refresh_from_db()
         return series.last
 {% for e in entities %}
 
@@ -40,7 +41,11 @@ class {{ e.cls }}(models.Model):
         with transaction.atomic():
             if not self.number:
                 year = timezone.now().year
+                {% if e.series_year %}
                 seq = _next_sequence("{{ e.name }}-%d" % year)
+{% else %}
+                seq = _next_sequence("{{ e.name }}")
+{% endif %}
                 self.number = {{ e.numbering|pyrepr }}.format(year=year, seq=seq)
             super().save(*args, **kwargs)
 {% endif %}

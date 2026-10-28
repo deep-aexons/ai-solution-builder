@@ -8,6 +8,7 @@ from django.core.validators import (  # noqa: F401
     RegexValidator,
 )
 from django.db import models, transaction
+from django.db.models import F
 from django.utils import timezone
 
 
@@ -22,8 +23,8 @@ class NumberSeries(models.Model):
 def _next_sequence(key):
     with transaction.atomic():
         series, _ = NumberSeries.objects.select_for_update().get_or_create(key=key)
-        series.last += 1
-        series.save(update_fields=["last"])
+        NumberSeries.objects.filter(pk=series.pk).update(last=F("last") + 1)
+        series.refresh_from_db()
         return series.last
 
 
@@ -51,7 +52,7 @@ class GatePass(models.Model):
             if not self.number:
                 year = timezone.now().year
                 seq = _next_sequence("gate_pass-%d" % year)
-                self.number = "GP-{year}-{seq:04d}".format(year=year, seq=seq)
+                self.number = "GP-{year}-{seq:05d}".format(year=year, seq=seq)
             super().save(*args, **kwargs)
 
     def __str__(self):

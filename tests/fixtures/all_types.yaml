@@ -1,0 +1,66 @@
+solution: all_types
+version: 1
+description: Exercises every field type and model option of the sidecar generator.
+extensions:
+  sidecar-django:
+    long_text: true
+external:
+  - name: erp_a
+    kind: kind_a
+    access: read
+  - name: erp_b
+    kind: kind_b
+    access: read
+entities:
+  - name: category
+    label: Category
+    numbering: "CAT-{#####}"
+    fields:
+      - {name: title, type: text, required: true, unique: true}
+  - name: widget
+    label: Widget
+    numbering: "W/{YYYY}/{####}"
+    fields:
+      - {name: title, type: text, required: true, unique: true, pattern: "^[A-Za-z ]+$"}
+      - {name: code, type: text, unique: true}
+      - {name: notes, type: text}
+      - {name: summary, type: text, default: "n/a"}
+      - {name: qty, type: number, required: true, min: 0, max: 100, default: 5}
+      - {name: opt_qty, type: number}
+      - {name: weight, type: decimal, required: true, min: 0.5}
+      - {name: opt_weight, type: decimal, max: 99.25}
+      - {name: price, type: money, required: true, max: 1000, default: 1.5}
+      - {name: opt_price, type: money}
+      - {name: due, type: date, required: true}
+      - {name: opt_due, type: date}
+      - {name: stamp, type: datetime, required: true, default: now}
+      - {name: opt_stamp, type: datetime}
+      - {name: kind, type: choice, required: true, options: [alpha, beta], default: alpha}
+      - {name: opt_kind, type: choice, options: [one, two]}
+      - {name: active, type: boolean, required: true, default: true}
+      - {name: opt_flag, type: boolean}
+      - {name: doc, type: attachment, required: true}
+      - {name: opt_doc, type: attachment}
+      - {name: category, type: link, required: true, to: [category]}
+      - {name: opt_category, type: link, to: [category]}
+      - {name: source, type: external_ref, required: true, to: [erp_a, erp_b]}
+      - {name: opt_source, type: external_ref, to: [erp_a]}
+      - {name: parts, type: table, of: widget_part}
+  - name: widget_part
+    label: Widget Part
+    child_of: widget
+    fields:
+      - {name: label, type: text, required: true}
+workflow:
+  entity: widget
+  states: [open, done]
+  initial: open
+  transitions:
+    - {from: open, to: done, action: finish, roles: [maker]}
+roles:
+  maker:
+    widget: [create, read]
+acceptance_tests:
+  - id: AT-01
+    covers: [workflow]
+    text: A maker can finish a widget.

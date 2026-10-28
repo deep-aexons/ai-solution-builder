@@ -11,7 +11,7 @@ external:
 entities:
   - name: gate_pass
     label: Gate Pass
-    numbering: "GP-.YYYY.-.####"
+    numbering: "GP-{YYYY}-{#####}"
     fields:
       - {name: direction, type: choice, required: true, options: [outbound, inbound]}
       - {name: delivery_note, type: external_ref, to: [delivery_note]}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import keyword
 import os
 import re
 import subprocess
@@ -28,8 +29,24 @@ _RESERVED = {
     "created_by",
     "created_at",
     "modified_at",
+    "models",
+    "settings",
+    "timezone",
+    "transaction",
+    "decimal",
+    "number_series",
+    "number_series_",
 }
-_NUMBER_TOKEN = re.compile(r"\{YYYY\}|\.YYYY\.|\{(#+)\}|\.(#+)")
+# Names the generated models module defines at module level (entity class names must avoid them).
+_MODULE_NAMES = {
+    "Decimal",
+    "NumberSeries",
+    "MaxValueValidator",
+    "MinValueValidator",
+    "RegexValidator",
+    "F",
+}
+_NUMBER_TOKEN = re.compile(r"\{YYYY\}|\{(#+)\}")
 
 
 def _py(value: Any) -> str:
@@ -58,13 +75,13 @@ def _number(value: float, decimal: bool) -> str:
 
 
 def _numbering_format(pattern: str, entity: str) -> str:
-    """Translate '{YYYY}'/'{#####}' (or '.YYYY.'/'.####') into a str.format string."""
+    """Translate '{YYYY}'/'{#####}' into a str.format string."""
     out: list[str] = []
     pos = 0
     counters = 0
     for m in _NUMBER_TOKEN.finditer(pattern):
         out.append(pattern[pos : m.start()].replace("{", "{{").replace("}", "}}"))
-        hashes = m.group(1) or m.group(2)
+        hashes = m.group(1)
         if hashes:
             out.append(f"{{seq:0{len(hashes)}d}}")
             counters += 1
@@ -94,7 +111,7 @@ def _field_lines(entity: Entity, f: Field, long_text: bool) -> list[str]:
     def default_kw(null_ok: bool = True) -> list[str]:
         if f.default is not None:
             return [f"default={_py(f.default)}"]
-        if optional and not null_ok:
+        if optional and not null_ok and not f.unique:
             return ['default=""']
         return []
 
@@ -111,17 +128,26 @@ def _field_lines(entity: Entity, f: Field, long_text: bool) -> list[str]:
         return extra
 
     t = f.type
+    uniq_null = optional and f.unique  # NULLs do not collide under a unique constraint
     if t == "table":
         return []
     if t == "text":
         if long_text:
-            kw = ["blank=True"] if optional else []
+            kw = (
+                (["null=True", "blank=True"] if uniq_null else ["blank=True"])
+                if optional
+                else []
+            )
             kw += default_kw(False)
             kw += ["unique=True"] if f.unique else []
             return [f"{name} = models.TextField({', '.join(with_validators(kw))})"]
         kw = (
             ["max_length=255"]
-            + (["blank=True"] if optional else [])
+            + (
+                (["null=True", "blank=True"] if uniq_null else ["blank=True"])
+                if optional
+                else []
+            )
             + default_kw(False)
         )
         if f.unique:
@@ -131,7 +157,8 @@ def _field_lines(entity: Entity, f: Field, long_text: bool) -> list[str]:
         if not f.options:
             raise ValueError(f"{entity.name}.{name}: choice field needs options")
         kw = ["max_length=64", f"choices={_choices(f.options)}"]
-        kw += ["blank=True"] if optional else []
+        if optional:
+            kw += ["null=True", "blank=True"] if uniq_null else ["blank=True"]
         kw += default_kw(False)
         if f.unique:
             kw.append("unique=True")
@@ -182,17 +209,33 @@ def _field_lines(entity: Entity, f: Field, long_text: bool) -> list[str]:
     return [f"{name} = models.DecimalField({', '.join(with_validators(kw))})"]
 
 
+def _check_name(name: str, where: str) -> None:
+    if keyword.iskeyword(name) or name in _RESERVED:
+        raise ValueError(f"{where}: name '{name}' is reserved")
+
+
 def _entity_context(solution: Solution, e: Entity) -> dict[str, Any]:
     ext = solution.extensions.get("sidecar-django") or {}
     long_text = bool(ext.get("long_text"))
+    _check_name(e.name, "entity")
+    if _cls(e.name) in _MODULE_NAMES:
+        raise ValueError(f"entity '{e.name}': class name collides with generated code")
     for f in e.fields:
+        if (f.min is not None or f.max is not None) and f.type not in (
+            "number",
+            "decimal",
+            "money",
+        ):
+            raise ValueError(
+                f"{e.name}.{f.name}: min/max only apply to number, decimal, money"
+            )
         names = (
             [f.name, f"{f.name}_kind", f"{f.name}_id"]
             if f.type == "external_ref"
             else [f.name]
         )
-        if _RESERVED & set(names):
-            raise ValueError(f"{e.name}.{f.name}: name is reserved by the sidecar")
+        for n in names:
+            _check_name(n, f"{e.name}.{f.name}")
     lines: list[str] = []
     workflow = next((w for w in solution.workflows if w.entity == e.name), None)
     if e.child_of:
@@ -234,6 +277,7 @@ def _entity_context(solution: Solution, e: Entity) -> dict[str, Any]:
         "label": e.label,
         "lines": lines,
         "numbering": numbering,
+        "series_year": bool(numbering and "{year}" in numbering),
     }
 
 
@@ -260,7 +304,11 @@ def _write(root: Path, rel: str, text: str, written: dict[str, bytes]) -> None:
 
 def _makemigrations(backend: Path) -> None:
     env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
-    env.update(DJANGO_SETTINGS_MODULE="config.settings", DEBUG="1")
+    env.update(
+        DJANGO_SETTINGS_MODULE="config.settings",
+        DEBUG="1",
+        PYTHONDONTWRITEBYTECODE="1",
+    )
     db = backend / "db.sqlite3"
     existed = db.exists()
     proc = subprocess.run(
@@ -299,11 +347,22 @@ def generate(solution: Solution, solution_dir: Path) -> GenerateResult:
     _write(app, "backend/entities/migrations/__init__.py", HEADER + "\n", files)
 
     migrations = backend / "entities" / "migrations"
-    for old in migrations.glob("0*.py"):
+    backup = {p: p.read_bytes() for p in migrations.glob("0*.py")}
+    for old in backup:
         old.unlink()
-    _makemigrations(backend)
+    try:
+        _makemigrations(backend)
+    except BaseException:
+        for fresh in migrations.glob("0*.py"):
+            fresh.unlink()
+        for path, data in backup.items():
+            path.write_bytes(data)
+        raise
     for path in sorted(migrations.glob("0*.py")):
-        text = path.read_text(encoding="utf-8")
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        # Django stamps a version/date line; drop it so output is byte-deterministic.
+        lines = [ln for ln in lines if not ln.startswith("# Generated by Django")]
+        text = "".join(lines).lstrip("\n")
         _write(app, path.relative_to(app).as_posix(), f"{HEADER}\n{text}", files)
 
     digests = {rel: hashlib.sha256(data).hexdigest() for rel, data in files.items()}
