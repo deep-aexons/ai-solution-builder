@@ -1,0 +1,105 @@
+"""Every role x entity x permission against the API (rules switched off)."""
+
+import pytest
+
+# Expected grants, straight from the approved model.
+GRANTS = {{ roles_lit }}
+ROLES = {{ role_names_lit }}
+ENTITIES = {{ top_entities_lit }}
+TRANSITIONS = {{ transitions_lit }}
+FIELD_ATTRS = {{ field_attrs_lit }}
+INITIAL = {{ initial_lit }}
+PERMISSIONS = {{ permissions_lit }}
+CASES = [(r, e, p) for r in ROLES for e in ENTITIES for p in PERMISSIONS]
+
+
+def has(role, entity, perm):
+    return perm in GRANTS.get(role, {}).get(entity, [])
+
+
+def url(entity, suffix=""):
+    return f"/api/{entity}/{suffix}"
+
+
+@pytest.mark.parametrize(("role", "entity", "perm"), CASES, ids=["-".join(c) for c in CASES])
+def test_permission(role, entity, perm, api, samples, make_user, rules_noop):
+    client = api(role)
+    if perm == "create":
+        want = has(role, entity, "create")
+        body = samples.payload(entity) if want else {}
+        resp = client.post(url(entity), body, format="json")
+        assert resp.status_code == (201 if want else 403), resp.content
+    elif perm == "read":
+        want = has(role, entity, "read")
+        resp = client.get(url(entity))
+        assert resp.status_code == (200 if want else 403), resp.content
+        if want and samples.complete(entity):
+            obj, _ = samples.make(entity)
+            assert client.get(url(entity, f"{obj.pk}/")).status_code == 200
+    elif perm == "update":
+        want = has(role, entity, "update")
+        obj, payload = samples.make(entity)
+        body = samples.patch_body(entity, payload)
+        resp = client.patch(url(entity, f"{obj.pk}/"), body, format="json")
+        assert resp.status_code == (200 if want else 403), resp.content
+    elif perm == "update_own_draft":
+        want = has(role, entity, "update_own_draft") or has(role, entity, "update")
+        obj, payload = samples.make(entity, owner=client.user)
+        body = samples.patch_body(entity, payload)
+        resp = client.patch(url(entity, f"{obj.pk}/"), body, format="json")
+        assert resp.status_code == (200 if want else 403), resp.content
+    elif perm == "delete":
+        want = has(role, entity, "delete")
+        obj, _ = samples.make(entity)
+        resp = client.delete(url(entity, f"{obj.pk}/"))
+        assert resp.status_code == (204 if want else 403), resp.content
+    elif perm == "approve":
+        usable = [
+            t
+            for t in TRANSITIONS
+            if t["entity"] == entity and t["from"] != INITIAL[entity] and role in t["roles"]
+        ]
+        if not usable:
+            pytest.skip(f"{role} has no transition out of a non-initial state on {entity}")
+        t = usable[0]
+        want = has(role, entity, "approve") and has(role, entity, "read")
+        obj, payload = samples.make(entity, state=t["from"])
+        body = {"action": t["action"]}
+        for name in t["require"]:
+            for attr in FIELD_ATTRS[entity][name]:
+                if attr not in payload and want:
+                    pytest.skip(f"no sample for required field {attr}")
+                if attr in payload:
+                    body[attr] = payload[attr]
+        resp = client.post(url(entity, f"{obj.pk}/transition/"), body, format="json")
+        assert resp.status_code == (200 if want else 403), resp.content
+        obj.refresh_from_db()
+        assert obj.state == (t["to"] if want else t["from"])
+    else:
+        assert perm == "export"
+        want = has(role, entity, "export") and has(role, entity, "read")
+        resp = client.get(url(entity, "export/"))
+        assert resp.status_code == (200 if want else 403)
+        if want:
+            assert resp["Content-Type"].startswith("text/csv")
+            assert resp.content.decode().splitlines()[0].startswith("id")
+{% if report_cases %}
+
+REPORT_ACCESS = {{ report_access_lit }}
+REPORT_CASES = {{ report_cases }}
+
+
+@pytest.mark.parametrize(("role", "report"), REPORT_CASES, ids=["-".join(c) for c in REPORT_CASES])
+def test_report_access(role, report, api, monkeypatch):
+    import reports
+
+    monkeypatch.setattr(reports, "run_report", lambda name, filters: [{"seen": dict(filters)}])
+    want = report in REPORT_ACCESS.get(role, [])
+    resp = api(role).get(f"/api/reports/{report}/?direction=outbound")
+    assert resp.status_code == (200 if want else 403), resp.content
+    if want:
+        body = resp.json()
+        assert body["name"] == report
+        assert body["rows"] == [{"seen": {"direction": "outbound"}}]
+        assert body["columns"]
+{% endif %}

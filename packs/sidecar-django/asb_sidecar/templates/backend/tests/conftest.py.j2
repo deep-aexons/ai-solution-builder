@@ -1,0 +1,163 @@
+"""Fixtures for the generated suites: fake ERP, rules switched off, role-based API clients."""
+
+import copy
+import sys
+from pathlib import Path
+
+import pytest
+
+BACKEND = Path(__file__).resolve().parents[1]
+if str(BACKEND / "vendor") not in sys.path:
+    sys.path.insert(0, str(BACKEND / "vendor"))
+
+import erp  # noqa: E402
+import rules  # noqa: E402
+from workflow.definitions import ENTITIES, WORKFLOWS  # noqa: E402
+
+# Valid request bodies per top-level entity, derived from the model.
+SAMPLES = {{ samples_lit }}
+
+
+class FakeConnector:
+    """In-memory ERP implementing asb.connector.Connector; seed it per test."""
+
+    def __init__(self):
+        self.records = {}
+        self.created = []
+
+    def seed(self, kind, id, record):
+        self.records.setdefault(kind, {})[id] = {"name": id, **record}
+
+    def inspect(self):
+        return {"kinds": sorted(self.records)}
+
+    def get(self, kind, id):
+        from asb.connector import NotFound
+
+        try:
+            return dict(self.records[kind][id])
+        except KeyError:
+            raise NotFound(f"{kind} {id} not found") from None
+
+    def list(self, kind, filters=None, fields=None, limit=50):
+        rows = []
+        for record in self.records.get(kind, {}).values():
+            if all(record.get(k) == v for k, v in (filters or {}).items()):
+                rows.append({k: record.get(k) for k in fields} if fields else dict(record))
+        return rows[:limit]
+
+    def create_draft(self, kind, data):
+        draft_id = f"DRAFT-{len(self.created) + 1}"
+        self.seed(kind, draft_id, {**data, "_state": "draft"})
+        self.created.append((kind, draft_id))
+        return dict(self.records[kind][draft_id])
+
+
+@pytest.fixture(autouse=True)
+def _isolated(settings):
+    settings.PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+    yield
+    erp.reset_connector()
+
+
+@pytest.fixture
+def fake_erp(monkeypatch):
+    fake = FakeConnector()
+    monkeypatch.setattr(erp, "get_connector", lambda: fake)
+    return fake
+
+
+@pytest.fixture
+def rules_noop(monkeypatch):
+    monkeypatch.setattr(rules, "run_rules", lambda obj: None)
+
+
+@pytest.fixture
+def make_user(db):
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Group
+    from django.core.management import call_command
+
+    call_command("asb_sync_roles")
+    count = [0]
+
+    def make(role, username=None):
+        count[0] += 1
+        user = get_user_model().objects.create_user(
+            username or f"{role}_{count[0]}", password="pw"
+        )
+        user.groups.add(Group.objects.get(name=role))
+        return user
+
+    return make
+
+
+@pytest.fixture
+def api(make_user):
+    """api(role) -> client logged in as a new user with that role (CSRF enforced)."""
+    from rest_framework.test import APIClient
+
+    def client_for(role=None, user=None):
+        user = user or make_user(role)
+        client = APIClient(enforce_csrf_checks=True)
+        token = client.get("/api/auth/csrf/").json()["csrfToken"]
+        resp = client.post(
+            "/api/auth/login/",
+            {"username": user.get_username(), "password": "pw"},
+            format="json",
+            HTTP_X_CSRFTOKEN=token,
+        )
+        assert resp.status_code == 200, resp.content
+        client.credentials(HTTP_X_CSRFTOKEN=resp.json()["csrfToken"])
+        client.user = user
+        return client
+
+    return client_for
+
+
+class Samples:
+    def __init__(self):
+        self.n = 0
+
+    def complete(self, entity):
+        return SAMPLES[entity]["complete"]
+
+    def payload(self, entity):
+        spec = SAMPLES[entity]
+        if not spec["complete"]:
+            pytest.skip(f"no valid sample for {entity}: {spec['reason']}")
+        self.n += 1
+        data = copy.deepcopy(spec["payload"])
+        for attr in spec["unique"]:
+            data[attr] = f"{data[attr]}{self.n}" if isinstance(data[attr], str) else data[attr] + self.n
+        return data
+
+    def make(self, entity, state=None, owner=None):
+        """Create a record through the ORM; returns (object, request payload)."""
+        from django.apps import apps
+
+        payload = self.payload(entity)
+        info = ENTITIES[entity]
+        tables = {t["name"]: t["of"] for t in info["tables"]}
+        values = {k: v for k, v in payload.items() if k not in tables}
+        if state is not None and entity in WORKFLOWS:
+            values["state"] = state
+        obj = apps.get_model("entities", info["model"]).objects.create(created_by=owner, **values)
+        for name, child in tables.items():
+            model = apps.get_model("entities", ENTITIES[child]["model"])
+            for row in payload.get(name, []):
+                model.objects.create(
+                    parent=obj, **{k: v for k, v in row.items() if not isinstance(v, list)}
+                )
+        return obj, payload
+
+    def patch_body(self, entity, payload):
+        attr = SAMPLES[entity]["patch"]
+        if attr is None:
+            pytest.skip(f"{entity} has no scalar field to change")
+        return {attr: payload[attr]}
+
+
+@pytest.fixture
+def samples():
+    return Samples()

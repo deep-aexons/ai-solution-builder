@@ -1,10 +1,14 @@
 import os
+import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Vendored neutral connector contract and the solution's ERP connector.
+sys.path.insert(0, str(BASE_DIR / "vendor"))
 
 DEBUG = os.environ.get("DEBUG") == "1"
 
@@ -104,6 +108,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "EXCEPTION_HANDLER": "api.errors.handle",
 }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

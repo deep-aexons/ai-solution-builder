@@ -5,7 +5,7 @@ from __future__ import annotations
 import pprint
 from typing import Any
 
-from asb.model import Entity, Solution
+from asb.model import PERMISSIONS, Entity, Solution
 
 # Entity names that would collide with fixed API routes.
 RESERVED_ROUTES = {"meta", "auth", "reports"}
@@ -55,6 +55,10 @@ def _entity_def(e: Entity) -> dict[str, Any]:
     }
 
 
+def lit(value: Any) -> str:
+    return pprint.pformat(value, width=88, sort_dicts=False)
+
+
 def definitions_context(solution: Solution) -> dict[str, str]:
     """Python-literal source for workflow/definitions.py (all values are plain data)."""
     for e in solution.entities:
@@ -92,9 +96,6 @@ def definitions_context(solution: Solution) -> dict[str, str]:
         for t in w.transitions:
             role_names.update(t.roles)
 
-    def lit(value: Any) -> str:
-        return pprint.pformat(value, width=88, sort_dicts=False)
-
     return {
         "entities_lit": lit(entities),
         "workflows_lit": lit(workflows),
@@ -103,4 +104,64 @@ def definitions_context(solution: Solution) -> dict[str, str]:
         "reports_lit": lit([r.name for r in solution.reports]),
         "report_access_lit": lit(report_access),
         "model_entity_lit": lit({cls_name(e.name): e.name for e in solution.entities}),
+    }
+
+
+def layer_context(solution: Solution, connector_entry: str | None) -> dict[str, Any]:
+    """Data for rules, reports, the ERP adapter and the generated test suites."""
+    from .samples import samples_context
+
+    base = definitions_context(solution)
+    top = [e for e in solution.entities if not e.child_of]
+    top_names = {e.name for e in top}
+    workflows = [w for w in solution.workflows if w.entity in top_names]
+    transitions = [
+        {
+            "entity": w.entity,
+            "from": t.from_,
+            "to": t.to,
+            "action": t.action,
+            "roles": list(t.roles),
+            "require": list(t.require),
+        }
+        for w in workflows
+        for t in w.transitions
+    ]
+    report_specs = {
+        r.name: {
+            "entity": r.entity,
+            "filters": list(r.filters),
+            "columns": list(r.columns),
+        }
+        for r in solution.reports
+    }
+    role_names = sorted(
+        {
+            *solution.roles,
+            *(r for w in solution.workflows for t in w.transitions for r in t.roles),
+        }
+    )
+    writes = sorted(
+        f"write:{x.kind}" for x in solution.external if x.access.startswith("write:")
+    )
+    connector = (
+        {"entry": connector_entry, "allowed_writes_lit": lit(writes)}
+        if connector_entry
+        else None
+    )
+    return {
+        **base,
+        "connector": connector,
+        "rules_lit": lit([(r.id, r.id.lower()) for r in solution.rules]),
+        "report_specs_lit": lit(report_specs),
+        "samples_lit": lit(samples_context(solution)),
+        "top_entities_lit": lit([e.name for e in top]),
+        "transitions_lit": lit(transitions),
+        "states_lit": lit({w.entity: list(w.states) for w in workflows}),
+        "initial_lit": lit({w.entity: w.initial for w in workflows}),
+        "field_attrs_lit": lit({e.name: _entity_def(e)["field_attrs"] for e in top}),
+        "permissions_lit": lit(list(PERMISSIONS)),
+        "report_cases": lit([(r, rep) for r in role_names for rep in report_specs])
+        if report_specs
+        else "",
     }

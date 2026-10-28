@@ -13,6 +13,7 @@ _NEEDS = {
     "create": ("create",),
     "partial_update": ("update", "update_own_draft"),
     "destroy": ("delete",),
+    "export": ("export",),
 }
 
 
@@ -45,7 +46,11 @@ class EntityPermission(BasePermission):
             return False
         perms = user_perms(user, view.entity)
         if any(p in perms for p in needs):
-            return True
+            # Export lists records, so it also needs read access.
+            if view.action != "export" or "read" in perms:
+                return True
+            self.message = "You do not have permission to read " + ENTITIES[view.entity]["label"] + "."
+            return False
         label = ENTITIES[view.entity]["label"]
         self.message = f"You do not have permission to {needs[0].replace('_', ' ')} {label}."
         return False

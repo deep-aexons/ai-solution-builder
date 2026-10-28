@@ -1,15 +1,19 @@
 """REST endpoints: one viewset per top-level entity, plus the workflow transition action."""
 
+import csv
 from collections.abc import Mapping
 
 from django.apps import apps
 from django.db import transaction
+from django.http import HttpResponse
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from workflow.definitions import ENTITIES
-from workflow.engine import TransitionDenied, apply_transition
+import reports
+from workflow.definitions import ENTITIES, REPORT_ACCESS, REPORTS, WORKFLOWS
+from workflow.engine import TransitionDenied, apply_transition, user_roles
 
 from .permissions import EntityPermission
 from .serializers import build_serializer
@@ -43,6 +47,36 @@ class EntityViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
+    @action(detail=False, methods=["get"])
+    def export(self, request):
+        """CSV of the readable scalar fields of every record."""
+        spec = ENTITIES[self.entity]
+        columns = ["id"]
+        if spec["numbering"]:
+            columns.append("number")
+        if self.entity in WORKFLOWS:
+            columns.append("state")
+        columns += spec["attrs"] + ["created_by", "created_at", "modified_at"]
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{self.entity}.csv"'
+        writer = csv.writer(response)
+        writer.writerow(columns)
+        for obj in self.get_queryset().select_related("created_by"):
+            row = []
+            for col in columns:
+                value = getattr(obj, col)
+                if col == "created_by":
+                    value = value.get_username() if value else ""
+                elif obj._meta.get_field(col).is_relation:
+                    value = getattr(obj, col + "_id")
+                elif hasattr(value, "name") and hasattr(value, "storage"):
+                    value = value.name
+                text = "" if value is None else str(value)
+                # Neutralise spreadsheet formulas.
+                row.append("'" + text if text[:1] in ("=", "+", "-", "@") else text)
+            writer.writerow(row)
+        return response
+
     @action(detail=True, methods=["post"])
     def transition(self, request, pk=None):
         obj = self.get_object()
@@ -67,3 +101,19 @@ def viewset_for(entity):
     return type(
         f"{ENTITIES[entity]['model']}ViewSet", (EntityViewSet,), {"entity": entity}
     )
+
+
+class ReportView(APIView):
+    """GET /api/reports/<name>/ for roles that list the report."""
+
+    def get(self, request, name):
+        if name not in REPORTS:
+            return Response({"detail": "Unknown report."}, status=404)
+        if not any(name in REPORT_ACCESS.get(r, []) for r in user_roles(request.user)):
+            return Response(
+                {"detail": "You do not have permission to run this report."}, status=403
+            )
+        rows = reports.run_report(name, request.query_params.dict())
+        return Response(
+            {"name": name, "columns": reports.REPORT_SPECS[name]["columns"], "rows": rows}
+        )

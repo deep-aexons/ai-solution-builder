@@ -5,7 +5,7 @@ from workflow.definitions import ENTITIES
 
 from .auth import CsrfView, LoginView, LogoutView
 from .meta import MetaView
-from .views import viewset_for
+from .views import ReportView, viewset_for
 
 router = DefaultRouter()
 router.include_root_view = False
@@ -18,5 +18,6 @@ urlpatterns = [
     path("auth/login/", LoginView.as_view()),
     path("auth/logout/", LogoutView.as_view()),
     path("auth/csrf/", CsrfView.as_view()),
+    path("reports/<str:name>/", ReportView.as_view()),
     path("", include(router.urls)),
 ]

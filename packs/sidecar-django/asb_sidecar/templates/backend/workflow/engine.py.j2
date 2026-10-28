@@ -5,6 +5,7 @@ import json
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 
+import rules
 from entities.models import TransitionLog
 
 from .definitions import (
@@ -151,6 +152,7 @@ def apply_transition(obj, action, user, data=None):
             raise TransitionInvalid(
                 f"Missing required fields: {', '.join(missing)}", fields=missing
             )
+        rules.run_rules(obj)
         from_state = obj.state
         obj.state = transition["to"]
         obj.save()

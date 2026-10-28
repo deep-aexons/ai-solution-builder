@@ -1,0 +1,9 @@
+"""Report registry. Each report lives in reports/<name>.py (AI-owned) as run(filters)."""
+
+import importlib
+
+REPORT_SPECS = {{ report_specs_lit }}
+
+
+def run_report(name, filters):
+    return importlib.import_module(f"reports.{name}").run(filters)

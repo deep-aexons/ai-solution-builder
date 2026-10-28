@@ -1,0 +1,11 @@
+import pytest
+
+{% for line in text_lines %}
+# {{ line }}
+{% endfor %}
+# covers: {{ covers }}
+
+
+@pytest.mark.at("{{ test_id }}")
+def test_{{ test_id|lower|replace("-", "_") }}():
+    pytest.fail("{{ test_id }} not implemented")

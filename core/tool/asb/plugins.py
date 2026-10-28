@@ -37,8 +37,10 @@ class Pack:
     capabilities: dict[str, Any]
     module: ModuleType
 
-    def generate(self, solution: Any, solution_dir: Path) -> GenerateResult:
-        return self.module.generate(solution, solution_dir)
+    def generate(
+        self, solution: Any, solution_dir: Path, **kwargs: Any
+    ) -> GenerateResult:
+        return self.module.generate(solution, solution_dir, **kwargs)
 
     def verify(self, solution: Any, solution_dir: Path) -> VerifyResult:
         return self.module.verify(solution, solution_dir)

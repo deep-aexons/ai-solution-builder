@@ -1,0 +1,51 @@
+solution: mini_docs
+version: 1
+description: Small document flow with an approval step and a required-field transition.
+entities:
+  - name: doc
+    label: Doc
+    fields:
+      - {name: title, type: text, required: true, unique: true}
+      - {name: kind, type: choice, required: true, options: [memo, letter]}
+      - {name: copies, type: number, min: 2, max: 9}
+      - {name: note, type: text}
+      - {name: items, type: table, of: doc_item}
+  - name: doc_item
+    label: Doc Item
+    child_of: doc
+    fields:
+      - {name: label, type: text, required: true}
+  - name: note
+    label: Note
+    fields:
+      - {name: text, type: text, required: true}
+workflow:
+  entity: doc
+  states: [draft, review, done, returned]
+  initial: draft
+  final_states: [done, returned]
+  transitions:
+    - {from: draft, to: review, action: submit, roles: [author]}
+    - {from: review, to: done, action: finish, roles: [author, editor]}
+    - {from: review, to: returned, action: send_back, roles: [editor], require: [note]}
+roles:
+  author:
+    doc: [create, read, update_own_draft, delete]
+    note: [create, read, update_own_draft, delete]
+  editor:
+    doc: [read, update, approve, delete, export]
+    note: [read]
+  clerk:
+    reports: [doc_list]
+rules:
+  - id: R1
+    text: Copies must not exceed the number of items.
+reports:
+  - name: doc_list
+    entity: doc
+    filters: [kind]
+    columns: [title, kind]
+acceptance_tests:
+  - id: AT-01
+    covers: [R1]
+    text: Too many copies are refused.

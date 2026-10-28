@@ -1,0 +1,30 @@
+"""The solution's ERP connector, built once per process from environment variables."""
+
+import threading
+
+from asb.connector import ConnectorError
+
+_lock = threading.Lock()
+_connector = None
+
+
+def get_connector():
+{% if connector %}
+    global _connector
+    with _lock:
+        if _connector is None:
+            import {{ connector.entry }}
+
+            _connector = {{ connector.entry }}.from_env(
+                allowed_writes=frozenset({{ connector.allowed_writes_lit }})
+            )
+        return _connector
+{% else %}
+    raise ConnectorError("no connector configured")
+{% endif %}
+
+
+def reset_connector():
+    global _connector
+    with _lock:
+        _connector = None
