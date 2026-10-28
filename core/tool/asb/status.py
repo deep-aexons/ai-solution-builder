@@ -149,6 +149,15 @@ def mark_done(sol_dir: Path, stage: str) -> None:
     log_event(sol_dir, "mark_done", stage)
 
 
+def mark_todo(sol_dir: Path, stage: str) -> None:
+    if stage not in STAGES:
+        raise ValueError(f"unknown stage '{stage}'")
+    st = load_status(sol_dir)
+    st.stages[stage] = "todo"
+    save_status(sol_dir, st)
+    log_event(sol_dir, "mark_todo", stage)
+
+
 def increment_verify_rounds(sol_dir: Path) -> int:
     st = load_status(sol_dir)
     st.verify_rounds += 1

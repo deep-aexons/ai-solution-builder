@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 from asb.plugins import VerifyResult
@@ -11,6 +12,11 @@ from asb.status import MAX_VERIFY_ROUNDS
 def _cell(text: str) -> str:
     first = text.strip().splitlines()[0] if text.strip() else ""
     return first.replace("|", "\\|")
+
+
+def _longest_backticks(text: str) -> int:
+    runs = re.findall(r"`+", text)
+    return max((len(r) for r in runs), default=0)
 
 
 def passed(result: VerifyResult) -> bool:
@@ -35,7 +41,8 @@ def render_report(
     lines += ["", "## Failures", ""]
     if failed:
         for c in failed:
-            lines += [f"### {c.name}", "", "```", c.details.strip(), "```", ""]
+            fence = "`" * max(3, _longest_backticks(c.details) + 1)
+            lines += [f"### {c.name}", "", fence, c.details.strip(), fence, ""]
     else:
         lines += ["None.", ""]
     lines += ["## Skipped", ""]

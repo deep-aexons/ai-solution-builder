@@ -1,6 +1,7 @@
 """Stage 5 verifier and the build/verify CLI; generated apps run in subprocesses."""
 
 import importlib
+import importlib.util
 import shutil
 import textwrap
 from pathlib import Path
@@ -134,6 +135,11 @@ def implement(sol_dir: Path, ats=tuple(AT_TESTS)) -> None:
         )
 
 
+BROWSER_STACK = bool(
+    shutil.which("npm") and importlib.util.find_spec("playwright") is not None
+)
+
+
 def by_name(result):
     return {c.name: c for c in result.checks}
 
@@ -215,10 +221,8 @@ def test_clean_app_passes_everything(tmp_path):
         assert got[name].status == "pass", details
     assert got["reports"].status == "pass", details
     assert got["static"].status == "pass", details
-    if shutil.which("npm"):
-        assert got["frontend_build"].status in ("pass", "skipped"), details
-    assert got["ui_smoke"].status in ("pass", "skipped"), details
-    if got["frontend_build"].status == "pass":
+    if BROWSER_STACK:
+        assert got["frontend_build"].status == "pass", details
         assert got["ui_smoke"].status == "pass", details
         assert (sol_dir / "app/frontend/dist/index.html").is_file()
         assert "worker/ticket: actions ['submit']" in got["ui_smoke"].details
@@ -238,12 +242,75 @@ def test_ui_smoke_fails_on_a_report_that_breaks_with_data(tmp_path):
         "    return [{'title': 1 / (t.pk - t.pk)} for t in Ticket.objects.all()]\n"
     )  # fine on an empty database, broken once a record exists
     got = by_name(verify(sol, sol_dir, root=root))
-    if got["frontend_build"].status != "pass":
-        pytest.skip("frontend build unavailable")
     assert got["reports"].status == "pass"
+    if not BROWSER_STACK:
+        pytest.skip("npm or playwright not available")
+    assert got["frontend_build"].status == "pass", got["frontend_build"].details
     assert got["ui_smoke"].status == "fail"
     assert "role reviewer" in got["ui_smoke"].details
     assert "ticket_list" in got["ui_smoke"].details
+
+
+def _tiny(tmp_path):
+    sol = parse_solution(yaml.safe_dump(TINY).encode(), Path("t.yaml"))
+    root = REPO_ROOT_FOR(tmp_path)
+    sol_dir = new_solution(root, "ticketing", "sidecar-django", None)
+    generate(sol, sol_dir, root=root)
+    implement(sol_dir)
+    return sol, sol_dir, root
+
+
+def test_skipped_at_is_not_evidence(tmp_path, no_frontend):
+    sol, sol_dir, root = _tiny(tmp_path)
+    (sol_dir / "app/backend/tests/test_at_04.py").write_text(
+        'import pytest\n\n\n@pytest.mark.at("AT-04")\n'
+        '@pytest.mark.skip(reason="later")\ndef test_at_04():\n    assert True\n'
+    )
+    got = by_name(verify(sol, sol_dir, root=root))
+    assert got["acceptance_mapping"].status == "fail"
+    assert "AT-04" in got["acceptance_mapping"].details
+    assert "skipped" in got["acceptance_mapping"].details
+    assert got["tests"].status == "pass"  # a skip alone does not fail the run
+
+
+def test_at_in_a_non_collected_file_is_not_evidence(tmp_path, no_frontend):
+    sol, sol_dir, root = _tiny(tmp_path)
+    backend = sol_dir / "app/backend/tests"
+    (backend / "test_at_04.py").unlink()
+    (backend / "helpers.py").write_text(
+        'import pytest\n\n\n@pytest.mark.at("AT-04")\ndef test_at_04():\n    assert True\n'
+    )
+    got = by_name(verify(sol, sol_dir, root=root))
+    assert got["acceptance_mapping"].status == "fail"
+    assert "AT-04" in got["acceptance_mapping"].details
+
+
+def test_failing_at_fails_mapping_and_tests(tmp_path, no_frontend):
+    sol, sol_dir, root = _tiny(tmp_path)
+    (sol_dir / "app/backend/tests/test_at_04.py").write_text(
+        'import pytest\n\n\n@pytest.mark.at("AT-04")\ndef test_at_04():\n    assert False\n'
+    )
+    got = by_name(verify(sol, sol_dir, root=root))
+    assert got["acceptance_mapping"].status == "fail"
+    assert (
+        "AT-04" in got["acceptance_mapping"].details
+        and "failed" in got["acceptance_mapping"].details
+    )
+    assert got["tests"].status == "fail"
+
+
+def test_unexpected_check_error_becomes_a_failed_check(
+    tmp_path, no_frontend, monkeypatch
+):
+    sol, sol_dir, root = _tiny(tmp_path)
+
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(verify_mod, "check_static", boom)
+    got = by_name(verify(sol, sol_dir, root=root))
+    assert got["static"].status == "fail" and "kaboom" in got["static"].details
+    assert got["tests"].status == "pass"
 
 
 # CLI ----------------------------------------------------------------------------------------
@@ -334,3 +401,24 @@ def test_build_then_three_verifies_then_gate(project):
     st = load_status(sol_dir)
     assert st.verify_rounds == 0 and st.stages["verify"] == "todo"
     assert "kept" in rebuilt.output  # AI-owned files survive
+
+
+def test_failed_round_after_a_pass_blocks_release(project):
+    from asb.status import GateError, require
+
+    root, sol_dir = project
+    approve_design(sol_dir)
+    assert cli(root, "build", "ticketing").exit_code == 0
+    assert cli(root, "verify", "ticketing").exit_code == 1  # round 1: stubs
+    implement(sol_dir)
+    assert cli(root, "verify", "ticketing").exit_code == 0  # round 2: pass
+    approve(sol_dir, "client", "t")
+    require(sol_dir, "release")
+    (sol_dir / "app/backend/tests/test_at_04.py").write_text(
+        'import pytest\n\n\n@pytest.mark.at("AT-04")\ndef test_at_04():\n    assert False\n'
+    )
+    assert cli(root, "verify", "ticketing").exit_code == 1  # round 3: fail
+    st = load_status(sol_dir)
+    assert st.verify_rounds == 3 and st.stages["verify"] == "todo"
+    with pytest.raises(GateError):
+        require(sol_dir, "release")

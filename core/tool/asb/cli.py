@@ -19,6 +19,7 @@ from asb.status import (
     load_status,
     log_event,
     mark_done,
+    mark_todo,
     new_solution,
     require,
     reset_verify,
@@ -269,9 +270,11 @@ def build_cmd(
     except ModelError as exc:
         for issue in exc.issues:
             typer.echo(issue)
+        log_event(sol_dir, "build_failed", f"model issues={len(exc.issues)}")
         raise typer.Exit(1) from exc
     except (GateError, FileNotFoundError, ValueError, ImportError) as exc:
         typer.echo(f"error: {exc}")
+        log_event(sol_dir, "build_failed", f"load error: {type(exc).__name__}")
         raise typer.Exit(1) from exc
     issues = validate(solution, pack.capabilities)
     if issues:
@@ -315,8 +318,14 @@ def verify_cmd(
     try:
         solution = load_solution(sol_dir / "design" / "solution.yaml")
         pack = load_pack(base, load_status(sol_dir).pack)
-    except (ModelError, GateError, FileNotFoundError, ValueError, ImportError) as exc:
+    except ModelError as exc:
+        for issue in exc.issues:
+            typer.echo(issue)
+        log_event(sol_dir, "verify_failed", f"model issues={len(exc.issues)}")
+        raise typer.Exit(1) from exc
+    except (GateError, FileNotFoundError, ValueError, ImportError) as exc:
         typer.echo(f"error: {exc}")
+        log_event(sol_dir, "verify_failed", f"load error: {type(exc).__name__}")
         raise typer.Exit(1) from exc
     round_no = increment_verify_rounds(sol_dir)
     try:
@@ -324,6 +333,7 @@ def verify_cmd(
     except Exception as exc:
         typer.echo(f"error: verify crashed: {exc}")
         log_event(sol_dir, "verify_failed", f"round={round_no} {type(exc).__name__}")
+        mark_todo(sol_dir, "verify")
         raise typer.Exit(1) from exc
     (sol_dir / "verify-report.md").write_text(
         render_report(name, round_no, result), encoding="utf-8"
@@ -342,5 +352,6 @@ def verify_cmd(
         mark_done(sol_dir, "verify")
         typer.echo(f"PASS: see {sol_dir / 'verify-report.md'}")
         return
+    mark_todo(sol_dir, "verify")  # a failed round never leaves a stale "done"
     typer.echo(f"FAIL: {n_fail} check(s) failed; see {sol_dir / 'verify-report.md'}")
     raise typer.Exit(1)

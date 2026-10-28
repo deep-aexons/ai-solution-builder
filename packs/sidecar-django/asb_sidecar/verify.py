@@ -1,25 +1,21 @@
 """Stage 5 verifier: all automated evidence for a generated sidecar app.
 
 The generated app is only ever run in subprocesses (pytest, manage.py, npm); the
-only code run in this process is the Playwright driver for the UI smoke check.
+only code run in this process is the Playwright driver in `ui_smoke`.
 """
 
 from __future__ import annotations
 
 import ast
-import json
-import os
+import fnmatch
 import re
 import shutil
-import signal
-import socket
 import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,39 +25,121 @@ from asb.model import Solution
 from asb.plugins import CheckResult, VerifyResult
 from asb.status import load_status
 
+from .procutil import as_text, clean_env, first_line, run_group, tail
+from .ui_smoke import check_ui_smoke
+
 TESTS_TIMEOUT = 900
 NPM_TIMEOUT = 600
-UI_TIMEOUT = 300
 MATRIX_FILES = {
     "permission_matrix": "test_permission_matrix",
     "workflow_matrix": "test_workflow_matrix",
     "reports": "test_reports_smoke",
 }
-_DROP_ENV = ("DEBUG", "SECRET_KEY", "DATABASE_URL", "DJANGO_SETTINGS_MODULE")
-_NETWORK_ERRORS = re.compile(
-    r"ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH"
-    r"|network|getaddrinfo|socket hang up|unable to resolve|proxy",
-    re.IGNORECASE,
+# The generated pytest.ini's python_files; only these files can hold collected tests.
+TEST_FILE_PATTERNS = ("tests.py", "test_*.py")
+_NPM_NETWORK_CODE = re.compile(
+    r"^npm (?:ERR!|error) code (ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNREFUSED|ECONNRESET)\b",
+    re.MULTILINE,
 )
-UI_PASSWORD = "ui-smoke-pw-1"  # throwaway user in a throwaway database
 
 
-def _clean_env(**extra: str) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in _DROP_ENV}
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env.update(extra)
-    return env
+def _is_test_file(path: Path) -> bool:
+    return any(fnmatch.fnmatch(path.name, p) for p in TEST_FILE_PATTERNS)
 
 
-def _tail(text: str, lines: int = 40) -> str:
-    return "\n".join(text.strip().splitlines()[-lines:])
+# pytest run ------------------------------------------------------------------------------
 
 
-def _first_line(text: str) -> str:
-    return text.strip().splitlines()[0] if text.strip() else ""
+@dataclass
+class Case:
+    module: str  # dotted module path, e.g. tests.test_at_01
+    name: str
+    outcome: str  # passed | failed | error | skipped
+    message: str = ""
+
+    @property
+    def file(self) -> str:
+        return self.module.rsplit(".", 1)[-1]
+
+    @property
+    def func(self) -> str:
+        return self.name.split("[", 1)[0]
 
 
-# 1. acceptance mapping -----------------------------------------------------------
+@dataclass
+class PytestRun:
+    returncode: int | None
+    output: str
+    cases: list[Case] = field(default_factory=list)
+    timed_out: bool = False
+    junit_ok: bool = True
+
+
+def _parse_junit(path: Path) -> list[Case] | None:
+    try:
+        root = ET.parse(path).getroot()  # our own pytest run's output
+    except (OSError, ET.ParseError):
+        return None
+    cases: list[Case] = []
+    for tc in root.iter("testcase"):
+        parts = tc.get("classname", "").split(".")
+        # drop a trailing test class name (CamelCase) from the module path
+        while parts and parts[-1][:1].isupper():
+            parts.pop()
+        outcome, message = "passed", ""
+        for child in tc:
+            if child.tag in ("failure", "error", "skipped"):
+                outcome = "failed" if child.tag == "failure" else child.tag
+                message = (child.get("message") or child.text or "").strip()
+                break
+        cases.append(Case(".".join(parts), tc.get("name", ""), outcome, message))
+    return cases
+
+
+def run_pytest(backend: Path) -> PytestRun:
+    with tempfile.TemporaryDirectory(prefix="asb-verify-") as tmp:
+        junit = Path(tmp) / "junit.xml"
+        cmd = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-rs",
+            f"--junitxml={junit}",
+        ]
+        try:
+            proc = run_group(cmd, backend, TESTS_TIMEOUT, clean_env())
+        except subprocess.TimeoutExpired as exc:
+            return PytestRun(None, as_text(exc.output), timed_out=True)
+        except OSError as exc:
+            return PytestRun(None, f"cannot run pytest: {exc}", junit_ok=False)
+        cases = _parse_junit(junit)
+    return PytestRun(
+        proc.returncode, proc.stdout, cases or [], junit_ok=cases is not None
+    )
+
+
+def _failures(cases: list[Case]) -> list[Case]:
+    return [c for c in cases if c.outcome in ("failed", "error")]
+
+
+def _describe_failures(bad: list[Case], limit: int = 10) -> str:
+    lines = [
+        f"{c.file}::{c.name}: {first_line(c.message) or c.outcome}" for c in bad[:limit]
+    ]
+    if len(bad) > limit:
+        lines.append(f"... and {len(bad) - limit} more")
+    return "\n".join(lines)
+
+
+def _counts(cases: list[Case]) -> str:
+    passed = sum(1 for c in cases if c.outcome == "passed")
+    skipped = sum(1 for c in cases if c.outcome == "skipped")
+    return f"{passed} passed, {len(_failures(cases))} failed, {skipped} skipped"
+
+
+# 1. acceptance mapping -----------------------------------------------------------------------
 
 
 def _at_marker(dec: ast.expr) -> str | None:
@@ -98,15 +176,21 @@ def _is_stub(fn: ast.FunctionDef | ast.AsyncFunctionDef, at_id: str) -> bool:
     return False
 
 
-def check_acceptance_mapping(solution: Solution, backend: Path) -> CheckResult:
-    real: dict[str, list[str]] = {}
+def _scan_ats(
+    backend: Path,
+) -> tuple[dict[str, list[tuple[str, str]]], dict[str, list[str]]]:
+    """(id -> [(module, function)] real, id -> [location] stubs) from collectable test files."""
+    real: dict[str, list[tuple[str, str]]] = {}
     stubs: dict[str, list[str]] = {}
     for path in sorted((backend / "tests").rglob("*.py")):
+        if not _is_test_file(path):
+            continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except (SyntaxError, ValueError, OSError):
             continue  # a broken test file surfaces in the `tests` check
-        rel = path.relative_to(backend).as_posix()
+        rel = path.relative_to(backend)
+        module = ".".join(rel.with_suffix("").parts)
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
@@ -114,122 +198,65 @@ def check_acceptance_mapping(solution: Solution, backend: Path) -> CheckResult:
                 at_id = _at_marker(dec)
                 if at_id is None:
                     continue
-                bucket = stubs if _is_stub(node, at_id) else real
-                bucket.setdefault(at_id, []).append(f"{rel}::{node.name}")
+                if _is_stub(node, at_id):
+                    stubs.setdefault(at_id, []).append(f"{rel.as_posix()}::{node.name}")
+                else:
+                    real.setdefault(at_id, []).append((module, node.name))
+    return real, stubs
+
+
+def check_acceptance_mapping(
+    solution: Solution, backend: Path, run: PytestRun | None = None
+) -> CheckResult:
+    real, stubs = _scan_ats(backend)
     wanted = [t.id for t in solution.acceptance_tests]
     missing = [i for i in wanted if i not in real and i not in stubs]
     stubbed = [i for i in wanted if i not in real and i in stubs]
-    if not missing and not stubbed:
-        return CheckResult(
-            "acceptance_mapping", "pass", f"{len(wanted)} acceptance tests mapped"
-        )
-    lines = []
+    lines: list[str] = []
     if missing:
         lines.append("no test marked @pytest.mark.at for: " + ", ".join(missing))
     for i in stubbed:
         lines.append(f"{i}: still the generated stub ({', '.join(stubs[i])})")
-    return CheckResult("acceptance_mapping", "fail", "\n".join(lines))
-
-
-# 2-5. pytest ------------------------------------------------------------------------
-
-
-@dataclass
-class Case:
-    file: str
-    name: str
-    outcome: str  # passed | failed | error | skipped
-    message: str = ""
-
-
-@dataclass
-class PytestRun:
-    returncode: int | None
-    output: str
-    cases: list[Case] = field(default_factory=list)
-    timed_out: bool = False
-    junit_ok: bool = True
-
-
-def _parse_junit(path: Path) -> list[Case] | None:
-    try:
-        root = ET.parse(path).getroot()  # our own pytest run's output
-    except (OSError, ET.ParseError):
-        return None
-    cases: list[Case] = []
-    for tc in root.iter("testcase"):
-        classname = tc.get("classname", "")
-        module = next(
-            (p for p in reversed(classname.split(".")) if p.startswith("test_")),
-            classname,
-        )
-        outcome, message = "passed", ""
-        for child in tc:
-            if child.tag in ("failure", "error", "skipped"):
-                outcome = "failed" if child.tag == "failure" else child.tag
-                message = (child.get("message") or child.text or "").strip()
-                break
-        cases.append(Case(module, tc.get("name", ""), outcome, message))
-    return cases
-
-
-def run_pytest(backend: Path) -> PytestRun:
-    with tempfile.TemporaryDirectory(prefix="asb-verify-") as tmp:
-        junit = Path(tmp) / "junit.xml"
-        cmd = [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-p",
-            "no:cacheprovider",
-            "-rs",
-            f"--junitxml={junit}",
-        ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=backend,
-                env=_clean_env(),
-                capture_output=True,
-                text=True,
-                timeout=TESTS_TIMEOUT,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            out = exc.stdout if isinstance(exc.stdout, str) else ""
-            return PytestRun(None, out, timed_out=True)
-        cases = _parse_junit(junit)
-    return PytestRun(
-        proc.returncode,
-        proc.stdout + proc.stderr,
-        cases or [],
-        junit_ok=cases is not None,
+    if run is not None:
+        for at_id in wanted:
+            if at_id not in real:
+                continue
+            found = [
+                c
+                for c in run.cases
+                for module, func in real[at_id]
+                if c.module == module and c.func == func
+            ]
+            if any(c.outcome == "passed" for c in found) and not _failures(found):
+                continue
+            if not found:
+                why = "not collected or not executed by the test run"
+            elif _failures(found):
+                why = "failed: " + first_line(_failures(found)[0].message or "failed")
+            else:
+                why = "skipped: " + first_line(found[0].message or "no reason")
+            lines.append(f"{at_id}: no passing executed test ({why})")
+    if lines:
+        return CheckResult("acceptance_mapping", "fail", "\n".join(lines))
+    return CheckResult(
+        "acceptance_mapping",
+        "pass",
+        f"{len(wanted)} acceptance tests mapped and passing",
     )
 
 
-def _failures(cases: list[Case]) -> list[Case]:
-    return [c for c in cases if c.outcome in ("failed", "error")]
-
-
-def _describe_failures(bad: list[Case], limit: int = 10) -> str:
-    lines = [
-        f"{c.file}::{c.name}: {_first_line(c.message) or c.outcome}"
-        for c in bad[:limit]
-    ]
-    if len(bad) > limit:
-        lines.append(f"... and {len(bad) - limit} more")
-    return "\n".join(lines)
-
-
-def _counts(cases: list[Case]) -> str:
-    n = {o: sum(1 for c in cases if c.outcome == o) for o in ("passed", "skipped")}
-    bad = len(_failures(cases))
-    return f"{n['passed']} passed, {bad} failed, {n['skipped']} skipped"
+# 2-5. pytest results -----------------------------------------------------------------------------
 
 
 def check_tests(run: PytestRun) -> CheckResult:
     if run.timed_out:
         return CheckResult("tests", "fail", f"pytest timed out after {TESTS_TIMEOUT}s")
+    if not run.junit_ok:
+        return CheckResult(
+            "tests",
+            "fail",
+            f"pytest exited {run.returncode} without a result file\n{tail(run.output)}",
+        )
     other_files = set(MATRIX_FILES.values())
     cases = [c for c in run.cases if c.file not in other_files]
     bad = _failures(cases)
@@ -237,24 +264,18 @@ def check_tests(run: PytestRun) -> CheckResult:
         return CheckResult(
             "tests", "fail", f"{_counts(cases)}\n{_describe_failures(bad)}"
         )
-    if not run.junit_ok or (run.returncode not in (0, None) and not run.cases):
-        return CheckResult(
-            "tests",
-            "fail",
-            f"pytest exited {run.returncode} without a result file\n{_tail(run.output)}",
-        )
     if "warnings summary" in run.output:
         return CheckResult(
             "tests",
             "fail",
-            f"warnings in test run ({_counts(cases)})\n{_tail(run.output)}",
+            f"warnings in test run ({_counts(cases)})\n{tail(run.output)}",
         )
-    if run.returncode not in (0, 5) and not _failures(run.cases):
+    if run.returncode != 0 and not _failures(run.cases):
         return CheckResult(
-            "tests",
-            "fail",
-            f"pytest exited {run.returncode}\n{_tail(run.output)}",
+            "tests", "fail", f"pytest exited {run.returncode}\n{tail(run.output)}"
         )
+    if not cases:
+        return CheckResult("tests", "fail", "no tests collected")
     return CheckResult("tests", "pass", _counts(cases))
 
 
@@ -268,6 +289,8 @@ def check_matrix(name: str, run: PytestRun, expected: bool) -> CheckResult:
         return CheckResult(name, "pass", reason)
     if run.timed_out:
         return CheckResult(name, "fail", "pytest timed out")
+    if not run.junit_ok:
+        return CheckResult(name, "fail", "pytest produced no result file")
     cases = [c for c in run.cases if c.file == MATRIX_FILES[name]]
     bad = _failures(cases)
     incomplete = [
@@ -293,14 +316,19 @@ def check_matrix(name: str, run: PytestRun, expected: bool) -> CheckResult:
         lines.append("no case was executed")
     head = f"{executed} passed, {len(bad)} failed, {len(incomplete)} incomplete"
     if allowed:
-        kinds = sorted({_first_line(c.message).split(":")[0] for c in allowed})
-        head += f", {len(allowed)} allowed skips ({', '.join(kinds)})"
+        head += f", {len(allowed)} allowed skips"
+        lines_allowed = _describe_failures(allowed, 20)
+        if not lines:
+            return CheckResult(
+                name, "pass", head + "\nallowed skips:\n" + lines_allowed
+            )
+        lines.append("allowed skips:\n" + lines_allowed)
     if lines:
         return CheckResult(name, "fail", "\n".join([head, *lines]))
     return CheckResult(name, "pass", head)
 
 
-# 6. static ---------------------------------------------------------------------------
+# 6. static -------------------------------------------------------------------------------------
 
 
 def check_static(solution_dir: Path, root: Path) -> CheckResult:
@@ -320,21 +348,12 @@ def check_static(solution_dir: Path, root: Path) -> CheckResult:
     return CheckResult("static", "pass", "no issues" + note)
 
 
-# 7. frontend build ---------------------------------------------------------------------
+# 7. frontend build -----------------------------------------------------------------------------
 
 
-def _run(
-    cmd: list[str], cwd: Path, timeout: int, env: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+def is_npm_network_failure(output: str) -> bool:
+    """True only for npm's own network error codes (not 4xx/proxy/registry answers)."""
+    return _NPM_NETWORK_CODE.search(output) is not None
 
 
 def check_frontend_build(app: Path) -> CheckResult:
@@ -349,381 +368,65 @@ def check_frontend_build(app: Path) -> CheckResult:
     deadline = time.monotonic() + NPM_TIMEOUT
     with tempfile.TemporaryDirectory(prefix="asb-frontend-") as tmp:
         work = Path(tmp) / "frontend"
-        shutil.copytree(
-            src, work, ignore=shutil.ignore_patterns("node_modules", "dist")
-        )
         try:
-            inst = _run(
+            shutil.copytree(
+                src, work, ignore=shutil.ignore_patterns("node_modules", "dist")
+            )
+            inst = run_group(
                 [npm, "install", "--no-audit", "--no-fund"],
                 work,
-                NPM_TIMEOUT,
+                deadline - time.monotonic(),
+                clean_env(),
             )
             if inst.returncode != 0:
-                text = inst.stdout + inst.stderr
-                if _NETWORK_ERRORS.search(text):
+                if is_npm_network_failure(inst.stdout):
                     return CheckResult(
                         "frontend_build",
                         "skipped",
-                        "npm registry unreachable: " + _first_line(_tail(text, 5)),
+                        "npm registry unreachable: " + first_line(tail(inst.stdout, 5)),
                     )
                 return CheckResult(
-                    "frontend_build", "fail", "npm install failed\n" + _tail(text)
+                    "frontend_build", "fail", "npm install failed\n" + tail(inst.stdout)
                 )
-            build = _run(
-                [npm, "run", "build"],
-                work,
-                max(30, int(deadline - time.monotonic())),
+            build = run_group(
+                [npm, "run", "build"], work, deadline - time.monotonic(), clean_env()
             )
+            if build.returncode != 0:
+                return CheckResult(
+                    "frontend_build",
+                    "fail",
+                    "npm run build failed\n" + tail(build.stdout),
+                )
+            dist = work / "dist"
+            if not (dist / "index.html").is_file():
+                return CheckResult(
+                    "frontend_build", "fail", "build produced no dist/index.html"
+                )
+            target = src / "dist"
+            shutil.rmtree(target, ignore_errors=True)
+            shutil.copytree(dist, target)
         except subprocess.TimeoutExpired:
             return CheckResult(
-                "frontend_build", "fail", f"timed out after {NPM_TIMEOUT}s"
+                "frontend_build", "fail", f"timed out (limit {NPM_TIMEOUT}s in total)"
             )
-        if build.returncode != 0:
+        except OSError as exc:
             return CheckResult(
-                "frontend_build",
-                "fail",
-                "npm run build failed\n" + _tail(build.stdout + build.stderr),
+                "frontend_build", "fail", f"file or process error: {exc}"
             )
-        dist = work / "dist"
-        if not (dist / "index.html").is_file():
-            return CheckResult(
-                "frontend_build", "fail", "build produced no dist/index.html"
-            )
-        target = src / "dist"
-        shutil.rmtree(target, ignore_errors=True)
-        shutil.copytree(dist, target)
     return CheckResult("frontend_build", "pass", "built frontend/dist")
 
 
-# 8. UI smoke ------------------------------------------------------------------------------
-
-SEED_SCRIPT = r'''
-import datetime, json
-from django.apps import apps
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
-from django.utils import timezone
-from workflow.definitions import ENTITIES, ROLE_NAMES, WORKFLOWS
-
-PASSWORD = %(password)r
-users = {}
-for role in ROLE_NAMES:
-    user, _ = get_user_model().objects.get_or_create(username="ui_" + role)
-    user.set_password(PASSWORD)
-    user.save()
-    user.groups.set([Group.objects.get(name=role)])
-    users[role] = user.get_username()
-
-seeded, skipped = {}, {}
+# entry point -------------------------------------------------------------------------------------
 
 
-def minimal(entity, spec):
-    """Attribute values for the required scalars; raises LookupError when impossible."""
-    values = {}
-    for f in spec["fields"]:
-        if not f["required"] or f["type"] == "table":
-            continue
-        t, name = f["type"], f["name"]
-        if t == "text":
-            values[name] = "smoke"
-        elif t == "number":
-            values[name] = 1
-        elif t in ("decimal", "money"):
-            values[name] = "1"
-        elif t == "date":
-            values[name] = datetime.date(2024, 1, 2)
-        elif t == "datetime":
-            values[name] = timezone.now()
-        elif t == "boolean":
-            values[name] = False
-        elif t == "choice":
-            values[name] = f["options"][0]
-        elif t == "external_ref":
-            values[name + "_kind"] = f["to"][0]
-            values[name + "_id"] = "SMOKE-1"
-        elif t == "link":
-            model = apps.get_model("entities", ENTITIES[f["to"][0]]["model"])
-            target = model.objects.first()
-            if target is None:
-                raise LookupError("link target " + f["to"][0] + " not seeded")
-            values[name] = target
-        else:
-            raise LookupError("required " + t + " field " + name + " is not seedable")
-    return values
-
-
-top = [n for n, s in ENTITIES.items() if not s["child_of"]]
-pending = list(top)
-for _ in range(len(top) + 1):
-    still = []
-    for name in pending:
-        spec = ENTITIES[name]
-        try:
-            obj = apps.get_model("entities", spec["model"]).objects.create(**minimal(name, spec))
-        except LookupError as exc:
-            skipped[name] = str(exc)
-            still.append(name)
-        except Exception as exc:
-            skipped[name] = type(exc).__name__ + ": " + str(exc)
-        else:
-            seeded[name] = obj.pk
-            skipped.pop(name, None)
-    pending = still
-    if not pending:
-        break
-print("ASB-SEED " + json.dumps({"users": users, "seeded": seeded, "skipped": skipped}))
-'''
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
-def _manage(
-    backend: Path, env: dict[str, str], *args: str, timeout: int = 120
-) -> subprocess.CompletedProcess[str]:
-    return _run([sys.executable, "manage.py", *args], backend, timeout, env)
-
-
-class UiFailure(Exception):
-    pass
-
-
-def _drive(base: str, seed: dict[str, Any], deadline: float) -> list[str]:
-    """Run the browser steps; returns notes. Raises UiFailure(step) on the first failure."""
-    from playwright.sync_api import Error as PwError
-    from playwright.sync_api import sync_playwright
-
-    notes: list[str] = []
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch()
-        try:
-            for role, username in seed["users"].items():
-                if time.monotonic() > deadline:
-                    raise UiFailure("overall timeout reached before role " + role)
-                _drive_role(browser, base, seed, role, username, notes, PwError)
-        finally:
-            browser.close()
-    return notes
-
-
-def _drive_role(
-    browser: Any,
-    base: str,
-    seed: dict[str, Any],
-    role: str,
-    username: str,
-    notes: list[str],
-    pw_error: type[Exception],
-) -> None:
-    context = browser.new_context()
-    page = context.new_page()
-    page.set_default_timeout(10_000)
-    problems: list[str] = []
-    step = "start"
-
-    def on_console(msg: Any) -> None:
-        if msg.type != "error":
-            return
-        # Before login the app probes /api/meta/ and the browser logs its 401/403.
-        probe = (
-            step in ("start", "login")
-            and "Failed to load resource" in msg.text
-            and "/api/meta/" in (msg.location or {}).get("url", "")
-            and re.search(r"\b40[13]\b", msg.text)
-        )
-        if not probe:
-            problems.append(f"console error: {msg.text}")
-
-    page.on("console", on_console)
-    page.on("pageerror", lambda e: problems.append(f"uncaught exception: {e}"))
-
-    def fail_if_problems() -> None:
-        if problems:
-            raise UiFailure(f"role {role}, {step}: {problems[0]}")
-
+def _guard(name: str, fn: Callable[[], CheckResult]) -> CheckResult:
+    """An unexpected exception becomes that check's failure; verify never crashes."""
     try:
-        step = "login"
-        page.goto(base + "/")
-        page.get_by_test_id("login-username").fill(username)
-        page.get_by_test_id("login-password").fill(UI_PASSWORD)
-        page.get_by_test_id("login-submit").click()
-        page.get_by_test_id("whoami").wait_for()
-        fail_if_problems()
-        meta = page.evaluate("fetch('/api/meta/').then(r => r.json())")
-        perms = meta["user"]["permissions"]
-        roles = set(meta["user"]["roles"])
-        workflows = {w["entity"]: w for w in meta["workflows"]}
-        for entity in [e["name"] for e in meta["entities"] if not e["child_of"]]:
-            have = perms.get(entity, [])
-            if "read" not in have:
-                continue
-            step = f"open list {entity}"
-            page.get_by_test_id("nav-" + entity).click()
-            page.get_by_test_id("list-" + entity).wait_for()
-            page.get_by_test_id("list-table").wait_for()
-            fail_if_problems()
-            if "create" in have:
-                step = f"open new form {entity}"
-                page.get_by_test_id("list-new").click()
-                page.locator('[data-testid^="field-"]').first.wait_for()
-                fail_if_problems()
-                page.get_by_test_id("nav-" + entity).click()
-                page.get_by_test_id("list-table").wait_for()
-            pk = seed["seeded"].get(entity)
-            if pk is None:
-                continue
-            step = f"open record {entity} #{pk}"
-            page.get_by_test_id(f"open-{pk}").click()
-            page.get_by_test_id("form-" + entity).wait_for()
-            fail_if_problems()
-            wf = workflows.get(entity)
-            if wf is not None:
-                state = page.get_by_test_id("state").inner_text().strip()
-                raw_state = wf["initial"]  # seeded records start in the initial state
-                expected = sorted(
-                    {
-                        t["action"]
-                        for t in wf["transitions"]
-                        if t["from"] == raw_state
-                        and roles & set(t["roles"])
-                        and (t["from"] == wf["initial"] or "approve" in have)
-                    }
-                )
-                for action in expected:
-                    step = f"action button {action} on {entity} (state {state})"
-                    page.get_by_test_id("action-" + action).wait_for()
-                notes.append(f"{role}/{entity}: actions {expected or 'none'}")
-        for report in meta["reports"]:
-            step = f"open report {report}"
-            page.get_by_test_id("nav-report-" + report).click()
-            page.get_by_test_id("report-" + report).wait_for()
-            with page.expect_response(
-                lambda r, n=report: f"/api/reports/{n}/" in r.url
-            ) as info:
-                page.get_by_test_id("report-run").click()
-            if info.value.status != 200:
-                raise UiFailure(
-                    f"role {role}, {step}: report API answered {info.value.status}"
-                )
-            page.wait_for_timeout(200)
-            fail_if_problems()
-        step = "finish"
-        fail_if_problems()
-    except UiFailure:
-        raise
-    except pw_error as exc:
-        extra = f" ({problems[0]})" if problems else ""
-        raise UiFailure(f"role {role}, {step}: {_first_line(str(exc))}{extra}") from exc
-    finally:
-        context.close()
-
-
-def check_ui_smoke(app: Path, frontend_ok: bool) -> CheckResult:
-    if not frontend_ok:
-        return CheckResult("ui_smoke", "skipped", "frontend_build did not pass")
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return CheckResult("ui_smoke", "skipped", "python playwright is not installed")
-    try:
-        with sync_playwright() as pw:
-            pw.chromium.launch().close()
+        return fn()
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
-            "ui_smoke",
-            "skipped",
-            "no launchable chromium: " + _first_line(str(exc)),
+            name, "fail", f"unexpected error: {type(exc).__name__}: {exc}"
         )
-    deadline = time.monotonic() + UI_TIMEOUT
-    with tempfile.TemporaryDirectory(prefix="asb-ui-") as tmp:
-        work = Path(tmp) / "app"
-        shutil.copytree(
-            app / "backend",
-            work / "backend",
-            ignore=shutil.ignore_patterns(
-                "__pycache__", "db.sqlite3", "media", "staticfiles", ".pytest_cache"
-            ),
-        )
-        shutil.copytree(app / "frontend" / "dist", work / "frontend" / "dist")
-        backend = work / "backend"
-        env = _clean_env(DEBUG="1", DJANGO_SETTINGS_MODULE="config.settings")
-        for args in (("migrate", "--noinput"), ("asb_sync_roles",)):
-            proc = _manage(backend, env, *args)
-            if proc.returncode != 0:
-                return CheckResult(
-                    "ui_smoke",
-                    "fail",
-                    f"setup step manage.py {args[0]} failed\n"
-                    + _tail(proc.stdout + proc.stderr),
-                )
-        proc = _manage(
-            backend, env, "shell", "-c", SEED_SCRIPT % {"password": UI_PASSWORD}
-        )
-        line = next(
-            (ln for ln in proc.stdout.splitlines() if ln.startswith("ASB-SEED ")), None
-        )
-        if proc.returncode != 0 or line is None:
-            return CheckResult(
-                "ui_smoke",
-                "fail",
-                "seeding failed\n" + _tail(proc.stdout + proc.stderr),
-            )
-        seed = json.loads(line.removeprefix("ASB-SEED "))
-        port = _free_port()
-        server = subprocess.Popen(
-            [
-                sys.executable,
-                "manage.py",
-                "runserver",
-                f"127.0.0.1:{port}",
-                "--noreload",
-            ],
-            cwd=backend,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        base = f"http://127.0.0.1:{port}"
-        try:
-            for _ in range(150):
-                if server.poll() is not None:
-                    return CheckResult("ui_smoke", "fail", "dev server exited at start")
-                try:
-                    urllib.request.urlopen(base + "/api/auth/csrf/", timeout=2).close()
-                    break
-                except (urllib.error.URLError, OSError):
-                    time.sleep(0.2)
-            else:
-                return CheckResult("ui_smoke", "fail", "dev server did not start")
-            notes = _drive(base, seed, deadline)
-        except UiFailure as exc:
-            return CheckResult("ui_smoke", "fail", str(exc))
-        except Exception as exc:  # noqa: BLE001
-            return CheckResult(
-                "ui_smoke", "fail", f"{type(exc).__name__}: {_first_line(str(exc))}"
-            )
-        finally:
-            try:
-                os.killpg(server.pid, signal.SIGTERM)
-                server.wait(timeout=10)
-            except (ProcessLookupError, subprocess.TimeoutExpired):
-                try:
-                    os.killpg(server.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-    details = f"{len(seed['users'])} role(s) walked; seeded {sorted(seed['seeded'])}"
-    if seed["skipped"]:
-        details += "\nnot seeded: " + "; ".join(
-            f"{k} ({v})" for k, v in sorted(seed["skipped"].items())
-        )
-    return CheckResult("ui_smoke", "pass", details + "\n" + "\n".join(notes))
-
-
-# entry point -----------------------------------------------------------------------------
 
 
 def verify(
@@ -747,16 +450,32 @@ def verify(
                 )
             ]
         )
-    results = [check_acceptance_mapping(solution, backend)]
-    run = run_pytest(backend)
-    results.append(check_tests(run))
+    try:
+        run = run_pytest(backend)
+    except Exception as exc:  # noqa: BLE001
+        run = PytestRun(None, f"{type(exc).__name__}: {exc}", junit_ok=False)
     top = {e.name for e in solution.entities if not e.child_of}
     has_transitions = any(w.entity in top and w.transitions for w in solution.workflows)
-    results.append(check_matrix("permission_matrix", run, bool(top)))
-    results.append(check_matrix("workflow_matrix", run, has_transitions))
-    results.append(check_matrix("reports", run, bool(solution.reports)))
-    results.append(check_static(solution_dir, base))
-    build = check_frontend_build(app)
+    results = [
+        _guard(
+            "acceptance_mapping",
+            lambda: check_acceptance_mapping(solution, backend, run),
+        ),
+        _guard("tests", lambda: check_tests(run)),
+        _guard(
+            "permission_matrix",
+            lambda: check_matrix("permission_matrix", run, bool(top)),
+        ),
+        _guard(
+            "workflow_matrix",
+            lambda: check_matrix("workflow_matrix", run, has_transitions),
+        ),
+        _guard("reports", lambda: check_matrix("reports", run, bool(solution.reports))),
+        _guard("static", lambda: check_static(solution_dir, base)),
+    ]
+    build = _guard("frontend_build", lambda: check_frontend_build(app))
     results.append(build)
-    results.append(check_ui_smoke(app, build.status == "pass"))
+    results.append(
+        _guard("ui_smoke", lambda: check_ui_smoke(app, build.status == "pass"))
+    )
     return VerifyResult(results)
