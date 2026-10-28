@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from asb.connector import Connector, ConnectorError
+from asb.connector import Connector
 from asb.model import Solution
 
 SAMPLE_LIMIT = 5
@@ -25,26 +25,45 @@ class DiscoveryReport:
 
 
 def _cell(text: object) -> str:
-    return " ".join(str(text).split()).replace("|", "\\|")
+    """One-line, Markdown-safe rendering of any remote-derived value."""
+    one = " ".join(str(text).split())
+    for ch in ("\\", "`", "|"):
+        one = one.replace(ch, "\\" + ch)
+    return one
 
 
-def _failure(exc: Exception) -> str:
-    return f"Connection failed: {type(exc).__name__}: {exc}"
+def _err(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _failure(exc: BaseException) -> str:
+    return f"Connection failed: {_err(exc)}"
 
 
 def run_discovery(
     solution: Solution, connector: Connector | None, error: Exception | None = None
 ) -> DiscoveryReport:
-    """Inspect `connector` (or report `error` raised while building it)."""
+    """Inspect `connector` (or report `error` raised while building it).
+
+    Never raises: any exception from the connector is rendered as text.
+    """
     info: dict = {}
     failure = _failure(error) if error is not None else None
-    if failure is None and connector is not None:
+    if failure is None and connector is None:
+        failure = "Connection failed: no connector available"
+    if failure is None:
         try:
             info = connector.inspect()
-        except ConnectorError as exc:
+            if not isinstance(info, dict):
+                raise TypeError(
+                    f"inspect() returned {type(info).__name__}, expected a mapping"
+                )
+        except Exception as exc:  # noqa: BLE001
             failure = _failure(exc)
     connected = failure is None
-    kinds = info.get("kinds", {}) if connected else {}
+    kinds = info.get("kinds") if connected else {}
+    if not isinstance(kinds, dict):
+        kinds = {}
 
     rows: list[str] = []
     gaps: list[str] = []
@@ -58,19 +77,26 @@ def run_discovery(
             doc, fields = "—", "0"
             if entry is None:
                 reason = "kind not found in system"
+            elif not isinstance(entry, dict):
+                reason = f"malformed inspect entry ({type(entry).__name__})"
             else:
                 doc = entry.get("doctype") or "—"
-                fields = str(len(entry.get("fields", [])))
-                if entry.get("error"):
+                flist = entry.get("fields", [])
+                try:
+                    fields = str(len(flist))
+                except TypeError:
+                    fields = "0"
+                    reason = "malformed fields in inspect entry"
+                if reason is None and entry.get("error"):
                     reason = str(entry["error"])
-                elif fields == "0":
+                elif reason is None and fields == "0":
                     reason = "no fields reported"
             try:
                 sample = str(len(connector.list(ext.kind, limit=SAMPLE_LIMIT)))
-            except ConnectorError as exc:
-                sample = f"error: {exc}"
+            except Exception as exc:  # noqa: BLE001
+                sample = f"error: {_err(exc)}"
                 if reason is None:
-                    reason = f"list failed: {exc}"
+                    reason = f"list failed: {_err(exc)}"
             status = "ok" if reason is None else f"gap: {reason}"
             if reason is not None:
                 gaps.append(f"{label}: {reason}")
@@ -84,7 +110,9 @@ def run_discovery(
 
     out = [f"# Discovery — {solution.solution}", "", "## Connection", ""]
     out.append(
-        f"System version: {info.get('version', 'unknown')}" if connected else failure
+        _cell(f"System version: {info.get('version', 'unknown')}")
+        if connected
+        else _cell(failure)
     )
     out += ["", "## External data", ""]
     if solution.external:
@@ -98,12 +126,12 @@ def run_discovery(
     writes = [e for e in solution.external if e.access.startswith("write:")]
     out += ["", "## Write access requested", ""]
     out += (
-        [f"- {e.name} ({e.kind}): {e.access}" for e in writes]
+        [f"- {_cell(e.name)} ({_cell(e.kind)}): {_cell(e.access)}" for e in writes]
         if writes
         else ["None — read only"]
     )
     out += ["", "## Gaps", ""]
-    out += [f"- {g}" for g in gaps] if gaps else ["None"]
+    out += [f"- {_cell(g)}" for g in gaps] if gaps else ["None"]
     out += ["", "## Notes for design", "", NOTES, ""]
     return DiscoveryReport("\n".join(out), connected, len(gaps))
 

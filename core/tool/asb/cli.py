@@ -1,5 +1,6 @@
 """Typer entry point for the asb command."""
 
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -7,7 +8,6 @@ import typer
 
 from asb import __version__
 from asb.checks import load_policy, read_anchor, run_checks
-from asb.connector import ConnectorError
 from asb.discover import run_discovery
 from asb.model import External, ModelError, Solution, load_solution
 from asb.plugins import load_connector, load_pack
@@ -30,6 +30,8 @@ from asb.status import (
 )
 from asb.validate import validate
 from asb.verify_report import passed, render_report
+
+_KIND_RE = re.compile(r"[a-z][a-z0-9_]*")
 
 app = typer.Typer(
     name="asb",
@@ -384,6 +386,8 @@ def discover_cmd(
         raise typer.Exit(1)
     model_path = sol_dir / "design" / "solution.yaml"
     if model_path.is_file():
+        if kind:
+            typer.echo("warning: design/solution.yaml exists; --kind ignored")
         try:
             solution = load_solution(model_path)
         except ModelError as exc:
@@ -391,6 +395,13 @@ def discover_cmd(
                 typer.echo(issue)
             raise typer.Exit(1) from exc
     elif kind:
+        bad = [k for k in kind if not _KIND_RE.fullmatch(k)]
+        if bad:
+            typer.echo(
+                f"error: invalid --kind {', '.join(repr(k) for k in bad)}: "
+                "use ^[a-z][a-z0-9_]*$"
+            )
+            raise typer.Exit(1)
         solution = Solution.model_construct(
             solution=name,
             external=[External(name=k, kind=k, access="read") for k in kind],
@@ -410,7 +421,7 @@ def discover_cmd(
     except (FileNotFoundError, ValueError, ImportError) as exc:
         typer.echo(f"error: {exc}")
         raise typer.Exit(1) from exc
-    except ConnectorError as exc:
+    except Exception as exc:  # noqa: BLE001 - from_env failure is a connection failure
         error = exc
     report = run_discovery(solution, connector, error)
     (sol_dir / "discovery.md").write_text(report.markdown, encoding="utf-8")
@@ -429,6 +440,7 @@ def discover_cmd(
             "Connection failed",
         )
         typer.echo(head)
+        mark_todo(sol_dir, "discovery")  # a failed run never leaves a stale "done"
         typer.echo(f"wrote {sol_dir / 'discovery.md'}; discovery not marked done")
         raise typer.Exit(1)
     mark_done(sol_dir, "discovery")
