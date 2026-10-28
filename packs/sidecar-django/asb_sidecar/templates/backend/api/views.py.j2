@@ -1,0 +1,55 @@
+"""REST endpoints: one viewset per top-level entity, plus the workflow transition action."""
+
+from collections.abc import Mapping
+
+from django.apps import apps
+from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+from workflow.definitions import ENTITIES
+from workflow.engine import TransitionDenied, apply_transition
+
+from .permissions import EntityPermission
+from .serializers import build_serializer
+
+
+class EntityViewSet(viewsets.ModelViewSet):
+    entity = None
+    permission_classes = [EntityPermission]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        model = apps.get_model("entities", ENTITIES[self.entity]["model"])
+        return model.objects.all().order_by("-pk")
+
+    def get_serializer_class(self):
+        return build_serializer(self.entity)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"])
+    def transition(self, request, pk=None):
+        obj = self.get_object()
+        body = request.data
+        if not isinstance(body, Mapping):
+            return Response({"detail": "Expected a JSON object."}, status=400)
+        body = {k: v for k, v in body.items()}
+        name = body.pop("action", None)
+        if not isinstance(name, str) or not name:
+            return Response({"detail": "'action' is required."}, status=400)
+        try:
+            obj = apply_transition(obj, name, request.user, body)
+        except TransitionDenied as exc:
+            payload = {"detail": exc.reason}
+            if exc.fields:
+                payload["fields"] = exc.fields
+            return Response(payload, status=exc.status)
+        return Response(self.get_serializer(obj).data)
+
+
+def viewset_for(entity):
+    return type(
+        f"{ENTITIES[entity]['model']}ViewSet", (EntityViewSet,), {"entity": entity}
+    )

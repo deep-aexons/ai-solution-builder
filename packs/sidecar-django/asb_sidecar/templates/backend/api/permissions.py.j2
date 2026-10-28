@@ -1,0 +1,63 @@
+"""Role-based DRF permissions; roles are Django groups, there is no superuser bypass."""
+
+from rest_framework.permissions import BasePermission
+
+from workflow.definitions import ENTITIES, WORKFLOWS
+from workflow.engine import user_perms
+
+# action -> permission that lets the user at least reach the endpoint
+_NEEDS = {
+    "list": ("read",),
+    "retrieve": ("read",),
+    "transition": ("read",),
+    "create": ("create",),
+    "partial_update": ("update", "update_own_draft"),
+    "destroy": ("delete",),
+}
+
+
+def can_update(user, entity, obj):
+    perms = user_perms(user, entity)
+    workflow = WORKFLOWS.get(entity)
+    if "update" in perms and (workflow is None or obj.state not in workflow["final_states"]):
+        return True
+    if "update_own_draft" in perms and obj.created_by_id == user.pk:
+        return workflow is None or obj.state == workflow["initial"]
+    return False
+
+
+def can_delete(user, entity, obj):
+    if "delete" not in user_perms(user, entity):
+        return False
+    workflow = WORKFLOWS.get(entity)
+    return workflow is None or obj.state == workflow["initial"]
+
+
+class EntityPermission(BasePermission):
+    message = "You do not have permission to do this."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        needs = _NEEDS.get(view.action)
+        if needs is None:
+            return False
+        perms = user_perms(user, view.entity)
+        if any(p in perms for p in needs):
+            return True
+        label = ENTITIES[view.entity]["label"]
+        self.message = f"You do not have permission to {needs[0].replace('_', ' ')} {label}."
+        return False
+
+    def has_object_permission(self, request, view, obj):
+        user, entity = request.user, view.entity
+        if view.action == "partial_update":
+            ok = can_update(user, entity, obj)
+            self.message = "You may not change this record in its current state."
+        elif view.action == "destroy":
+            ok = can_delete(user, entity, obj)
+            self.message = "You may not delete this record in its current state."
+        else:
+            ok = True
+        return ok

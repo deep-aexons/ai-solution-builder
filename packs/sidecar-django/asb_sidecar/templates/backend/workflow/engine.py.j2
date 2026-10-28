@@ -1,0 +1,163 @@
+"""Workflow state machine: role-checked transitions, atomic, with an audit log."""
+
+import json
+
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+
+from entities.models import TransitionLog
+
+from .definitions import (
+    ENTITIES,
+    MODEL_ENTITY,
+    PERMISSIONS,
+    ROLE_NAMES,
+    ROLES,
+    WORKFLOWS,
+    root_entity,
+)
+
+
+class TransitionDenied(Exception):
+    """The transition was refused; `status` is the HTTP status the API answers with."""
+
+    status = 403
+
+    def __init__(self, reason, fields=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.fields = list(fields or [])
+
+
+class TransitionInvalid(TransitionDenied):
+    """The request itself is wrong (unknown action, wrong state, missing/invalid data)."""
+
+    status = 400
+
+
+def user_roles(user):
+    """Roles of a user: names of their Django groups that the solution defines."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return set()
+    return set(user.groups.values_list("name", flat=True)) & set(ROLE_NAMES)
+
+
+def user_perms(user, entity):
+    """Permissions a user holds on an entity, in canonical order."""
+    granted = set()
+    for role in user_roles(user):
+        granted.update(ROLES.get(role, {}).get(root_entity(entity), []))
+    return [p for p in PERMISSIONS if p in granted]
+
+
+def entity_of(obj):
+    return MODEL_ENTITY[type(obj).__name__]
+
+
+def _is_empty(value):
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _current(obj, entity, name):
+    """Current value(s) of a solution field on the object, one per stored attribute."""
+    spec = next(f for f in ENTITIES[entity]["fields"] if f["name"] == name)
+    if spec["type"] == "table":
+        return [None] if not getattr(obj, name).exists() else [True]
+    return [getattr(obj, attr) for attr in ENTITIES[entity]["field_attrs"][name]]
+
+
+def _apply_fields(obj, entity, require, data):
+    """Validate and set body values for the required fields; return what was given."""
+    given = {}
+    for name in require:
+        for attr in ENTITIES[entity]["field_attrs"][name]:
+            if attr not in data:
+                continue
+            field = obj._meta.get_field(attr)
+            try:
+                value = field.clean(data[attr], obj)
+            except DjangoValidationError as exc:
+                raise TransitionInvalid(
+                    f"{attr}: {' '.join(exc.messages)}", fields=[name]
+                ) from exc
+            setattr(obj, field.attname, value)
+            given[attr] = json.loads(json.dumps(data[attr], default=str))
+    return given
+
+
+def available_actions(user, entity):
+    """Actions the user may perform from SOME state of the entity, in workflow order."""
+    workflow = WORKFLOWS.get(entity)
+    if workflow is None:
+        return []
+    roles = user_roles(user)
+    can_approve = "approve" in user_perms(user, entity)
+    out = []
+    for t in workflow["transitions"]:
+        ok = roles & set(t["roles"]) and (
+            t["from"] == workflow["initial"] or can_approve
+        )
+        if ok and t["action"] not in out:
+            out.append(t["action"])
+    return out
+
+
+def apply_transition(obj, action, user, data=None):
+    """Move `obj` through the workflow action as `user`; returns the saved object.
+
+    Raises TransitionDenied (403) when the user may not do it and TransitionInvalid
+    (400) for an unknown action, a wrong current state or missing/invalid fields.
+    """
+    data = dict(data or {})
+    entity = entity_of(obj)
+    workflow = WORKFLOWS.get(entity)
+    if workflow is None:
+        raise TransitionInvalid(f"'{entity}' has no workflow")
+    candidates = [t for t in workflow["transitions"] if t["action"] == action]
+    if not candidates:
+        raise TransitionInvalid(f"Unknown action '{action}'")
+    roles = user_roles(user)
+    if not any(roles & set(t["roles"]) for t in candidates):
+        raise TransitionDenied(f"Your role may not perform '{action}'")
+    with transaction.atomic():
+        obj = type(obj).objects.select_for_update().get(pk=obj.pk)
+        here = [t for t in candidates if t["from"] == obj.state]
+        if not here:
+            raise TransitionInvalid(
+                f"Action '{action}' is not available in state '{obj.state}'"
+            )
+        can_approve = "approve" in user_perms(user, entity)
+        allowed = [
+            t
+            for t in here
+            if roles & set(t["roles"])
+            and (t["from"] == workflow["initial"] or can_approve)
+        ]
+        if not allowed:
+            raise TransitionDenied(
+                f"'{action}' from state '{obj.state}' requires the approve permission"
+            )
+        transition = allowed[0]
+        given = _apply_fields(obj, entity, transition["require"], data)
+        missing = [
+            name
+            for name in transition["require"]
+            if any(_is_empty(v) for v in _current(obj, entity, name))
+        ]
+        if missing:
+            raise TransitionInvalid(
+                f"Missing required fields: {', '.join(missing)}", fields=missing
+            )
+        from_state = obj.state
+        obj.state = transition["to"]
+        obj.save()
+        TransitionLog.objects.create(
+            entity=entity,
+            object_id=str(obj.pk),
+            from_state=from_state,
+            to_state=obj.state,
+            action=action,
+            user=user,
+            data=given,
+        )
+    return obj

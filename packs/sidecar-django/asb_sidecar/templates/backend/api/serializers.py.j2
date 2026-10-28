@@ -1,0 +1,105 @@
+"""DRF serializers built from the solution definitions; child rows nest under the parent."""
+
+from django.apps import apps
+from django.db import transaction
+from rest_framework import serializers
+
+from workflow.definitions import ENTITIES, WORKFLOWS
+
+_cache = {}
+
+
+class TableField(serializers.Field):
+    """A list of child rows. Validated with a fresh (non-partial) serializer so a PATCH
+    that replaces rows cannot skip required child fields."""
+
+    def __init__(self, child_entity, **kwargs):
+        kwargs.setdefault("required", False)
+        super().__init__(**kwargs)
+        self.child_entity = child_entity
+
+    def to_internal_value(self, data):
+        if not isinstance(data, list):
+            raise serializers.ValidationError("Expected a list of rows.")
+        child = build_serializer(self.child_entity)(data=data, many=True)
+        child.is_valid(raise_exception=True)
+        return [dict(row) for row in child.validated_data]
+
+    def to_representation(self, manager):
+        rows = manager.all().order_by("pk")
+        return build_serializer(self.child_entity)(rows, many=True).data
+
+
+def _write_tables(entity, instance, tables):
+    """Replace all child rows of `instance` by the given rows (recursively)."""
+    for table in ENTITIES[entity]["tables"]:
+        if table["name"] not in tables:
+            continue
+        model = apps.get_model("entities", ENTITIES[table["of"]]["model"])
+        model.objects.filter(parent=instance).delete()
+        for row in tables[table["name"]]:
+            row = dict(row)
+            nested = {
+                t["name"]: row.pop(t["name"])
+                for t in ENTITIES[table["of"]]["tables"]
+                if t["name"] in row
+            }
+            child = model.objects.create(parent=instance, **row)
+            _write_tables(table["of"], child, nested)
+
+
+class _EntitySerializer(serializers.ModelSerializer):
+    entity = None
+
+    def _split(self, validated):
+        names = [t["name"] for t in ENTITIES[self.entity]["tables"]]
+        return {n: validated.pop(n) for n in names if n in validated}
+
+    @transaction.atomic
+    def create(self, validated_data):
+        tables = self._split(validated_data)
+        instance = super().create(validated_data)
+        _write_tables(self.entity, instance, tables)
+        return instance
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        tables = self._split(validated_data)
+        instance = super().update(instance, validated_data)
+        _write_tables(self.entity, instance, tables)
+        return instance
+
+
+def build_serializer(entity):
+    if entity in _cache:
+        return _cache[entity]
+    spec = ENTITIES[entity]
+    model = apps.get_model("entities", spec["model"])
+    is_child = bool(spec["child_of"])
+    declared = {
+        t["name"]: TableField(t["of"]) for t in spec["tables"]
+    }
+    fields = ["id"]
+    read_only = ["id"]
+    if spec["numbering"]:
+        fields.append("number")
+        read_only.append("number")
+    if entity in WORKFLOWS:
+        fields.append("state")
+        read_only.append("state")
+    fields += spec["attrs"] + list(declared)
+    read_only += spec["read_only_attrs"]
+    if not is_child:
+        declared["created_by"] = serializers.SlugRelatedField(
+            slug_field="username", read_only=True
+        )
+        fields += ["created_by", "created_at", "modified_at"]
+        read_only += ["created_at", "modified_at"]
+    meta = type("Meta", (), {"model": model, "fields": fields, "read_only_fields": read_only})
+    cls = type(
+        f"{spec['model']}Serializer",
+        (_EntitySerializer,),
+        {"entity": entity, "Meta": meta, **declared},
+    )
+    _cache[entity] = cls
+    return cls

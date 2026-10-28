@@ -28,6 +28,25 @@ def _next_sequence(key):
         return series.last
 
 
+class TransitionLog(models.Model):
+    entity = models.CharField(max_length=100)
+    object_id = models.CharField(max_length=64)
+    from_state = models.CharField(max_length=40)
+    to_state = models.CharField(max_length=40)
+    action = models.CharField(max_length=100)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+    )
+    at = models.DateTimeField(auto_now_add=True)
+    data = models.JSONField(default=dict)
+
+    def __str__(self):
+        return f"{self.entity} {self.object_id}: {self.from_state} -> {self.to_state}"
+
+
 class Category(models.Model):
     number = models.CharField(max_length=64, unique=True, editable=False)
     title = models.TextField(unique=True)

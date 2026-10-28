@@ -1,0 +1,33 @@
+"""Solution definitions the engine, permissions, serializers and metadata read."""
+
+ENTITIES = {{ entities_lit }}
+
+WORKFLOWS = {{ workflows_lit }}
+
+# role name == Django group name; permissions per entity (no superuser bypass).
+ROLES = {{ roles_lit }}
+
+ROLE_NAMES = {{ role_names_lit }}
+
+REPORTS = {{ reports_lit }}
+
+REPORT_ACCESS = {{ report_access_lit }}
+
+MODEL_ENTITY = {{ model_entity_lit }}
+
+PERMISSIONS = (
+    "create",
+    "read",
+    "update",
+    "update_own_draft",
+    "delete",
+    "approve",
+    "export",
+)
+
+
+def root_entity(name):
+    """Child entities have no roles of their own: the parent's permissions apply."""
+    while ENTITIES[name]["child_of"]:
+        name = ENTITIES[name]["child_of"]
+    return name

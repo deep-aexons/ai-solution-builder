@@ -1,0 +1,51 @@
+"""Session authentication endpoints."""
+
+from django.contrib.auth import authenticate, login, logout
+from django.middleware.csrf import get_token
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from workflow.engine import user_roles
+
+
+def _identity(request):
+    user = request.user
+    return {
+        "username": user.get_username(),
+        "roles": sorted(user_roles(user)),
+        "csrfToken": get_token(request),
+    }
+
+
+class LoginView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        username = request.data.get("username")
+        password = request.data.get("password")
+        if not isinstance(username, str) or not isinstance(password, str):
+            return Response({"detail": "username and password are required."}, status=400)
+        user = authenticate(request, username=username, password=password)
+        if user is None:
+            return Response({"detail": "Invalid username or password."}, status=400)
+        login(request, user)
+        return Response(_identity(request))
+
+
+class LogoutView(APIView):
+    def post(self, request):
+        logout(request)
+        return Response({"detail": "Logged out."})
+
+
+@method_decorator(ensure_csrf_cookie, name="dispatch")
+class CsrfView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({"csrfToken": get_token(request)})

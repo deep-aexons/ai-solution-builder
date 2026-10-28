@@ -25,6 +25,25 @@ def _next_sequence(key):
         NumberSeries.objects.filter(pk=series.pk).update(last=F("last") + 1)
         series.refresh_from_db()
         return series.last
+
+
+class TransitionLog(models.Model):
+    entity = models.CharField(max_length=100)
+    object_id = models.CharField(max_length=64)
+    from_state = models.CharField(max_length=40)
+    to_state = models.CharField(max_length=40)
+    action = models.CharField(max_length=100)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+    )
+    at = models.DateTimeField(auto_now_add=True)
+    data = models.JSONField(default=dict)
+
+    def __str__(self):
+        return f"{self.entity} {self.object_id}: {self.from_state} -> {self.to_state}"
 {% for e in entities %}
 
 
