@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-solution-builder"
+version = "0.1.0"
+description = "Platform-neutral AI module-builder: the asb CLI and its packs and connectors."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "pyyaml>=6",
+    "jinja2>=3.1",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+asb = "asb.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff",
+    "django>=5.2,<5.3",
+    "djangorestframework>=3.15",
+    "pytest-django>=4.8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["core/tool/asb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["core/tool", "packs/sidecar-django", "connectors/erpnext"]
+markers = [
+    "compose: requires Docker Compose (Postgres/ERPNext); run with ASB_COMPOSE=1",
+    "live_erp: requires a live ERPNext instance; run with ASB_ERP_URL set",
+]
+
+[tool.ruff]
+src = ["core/tool"]
