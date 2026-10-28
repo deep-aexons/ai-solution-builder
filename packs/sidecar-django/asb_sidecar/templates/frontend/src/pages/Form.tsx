@@ -12,13 +12,17 @@ import {
 } from "../api";
 import { FieldEditor } from "../components/Editors";
 import { emptyValue, entityOf, entityPayload, label, scalarPayload } from "../fields";
-import { Link, navigate } from "../router";
+import { Link, navigate, setFlash, takeFlash } from "../router";
 import type { EntityMeta, Meta, Row } from "../types";
 
 function blank(entity: EntityMeta): Row {
   let values: Row = {};
   for (const f of entity.fields) values = { ...values, ...emptyValue(f) };
   return values;
+}
+
+function failure_text(e: unknown): string {
+  return "Saved, but the file upload failed: " + problem(e).message;
 }
 
 function problem(e: unknown): ApiError {
@@ -59,6 +63,8 @@ export function Form({ meta, entity, id }: { meta: Meta; entity: string; id?: st
         setRecord(row);
         setValues(row);
         setLoading(false);
+        const flash = takeFlash();
+        if (flash) setFailure(new ApiError(0, flash));
       },
       (e) => {
         if (!live) return;
@@ -104,10 +110,11 @@ export function Form({ meta, entity, id }: { meta: Meta; entity: string; id?: st
           setRecord(saved);
           setValues(saved);
           setFiles({});
-          setFailure(
-            new ApiError(0, "Saved, but the file upload failed: " + problem(e).message),
-          );
-          if (!id) navigate("/e/" + entity + "/" + saved.id);
+          setFailure(new ApiError(0, failure_text(e)));
+          if (!id) {
+            setFlash(failure_text(e));
+            navigate("/e/" + entity + "/" + saved.id);
+          }
           return;
         }
       }
@@ -160,7 +167,7 @@ export function Form({ meta, entity, id }: { meta: Meta; entity: string; id?: st
     setActionFailure(null);
     try {
       const fields = spec.fields.filter((f) => require.includes(f.name));
-      const body = { action, ...scalarPayload(fields, actionValues, "update") };
+      const body = { action, ...scalarPayload(fields, actionValues, "update", true) };
       const row = await transition(entity, id, body);
       setRecord(row);
       setValues(row);

@@ -59,6 +59,7 @@ _MODULE_NAMES = {
 LAYER_FILES = (
     "workflow/engine.py",
     "workflow/definitions.py",
+    "config/test_settings.py",
     "api/permissions.py",
     "api/serializers.py",
     "api/views.py",

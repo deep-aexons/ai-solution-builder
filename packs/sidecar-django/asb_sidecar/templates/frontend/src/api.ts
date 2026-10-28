@@ -78,7 +78,10 @@ export async function request<T>(
     headers["Content-Type"] = "application/json";
     payload = JSON.stringify(body);
   }
-  if (method !== "GET") headers["X-CSRFToken"] = cookie("csrftoken");
+  if (method !== "GET") {
+    if (!cookie("csrftoken") && path !== "/api/auth/csrf/") await request("GET", "/api/auth/csrf/");
+    headers["X-CSRFToken"] = cookie("csrftoken");
+  }
   let response: Response;
   try {
     response = await fetch(path, { method, headers, body: payload, credentials: "same-origin" });

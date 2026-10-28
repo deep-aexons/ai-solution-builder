@@ -1,0 +1,7 @@
+"""Settings for the generated test suites: development mode, no environment needed."""
+
+import os
+
+os.environ.setdefault("DEBUG", "1")
+
+from .settings import *  # noqa: E402,F401,F403

@@ -30,6 +30,8 @@ Copy `.env.example` to `.env` and fill it in.
 | `SECRET_KEY` | Required unless `DEBUG=1`. |
 | `ALLOWED_HOSTS` | Comma-separated host names (default `localhost,127.0.0.1`). |
 | `DEBUG` | `1` for local development only. |
+| `CSRF_TRUSTED_ORIGINS` | Optional, comma-separated `https://host` origins for CSRF checks behind a proxy. |
+| `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE` | Set to `1` when served over HTTPS (default off). |
 | `DATABASE_URL` | `postgres://user:pass@host:port/db`; SQLite is used when unset. |
 {% if has_connector %}
 | `ASB_ERP_URL`, `ASB_ERP_API_KEY`, `ASB_ERP_API_SECRET` | ERP credentials for the `{{ connector }}` connector. Only read from the environment. |
@@ -74,6 +76,10 @@ docker compose up --build
 The `app` service builds the frontend, runs `migrate` and `asb_sync_roles`, then serves the UI
 and API with gunicorn on http://localhost:8000. Data lives in the `asb_pgdata` volume.
 
+The bundled database credentials (`asb`/`asb`) and an example `SECRET_KEY` are for local use only.
+Before exposing the stack, change the Postgres credentials in `docker-compose.yml` (and
+`DATABASE_URL`), set a strong random `SECRET_KEY`, and enable the secure-cookie settings over HTTPS.
+
 ## Users and roles
 
 Roles are Django groups; `asb_sync_roles` creates them from the solution:
@@ -91,8 +97,11 @@ the API.
 ```sh
 cd backend
 pip install -r requirements.txt
-python -m pytest
+python -m pytest -m "not at"   # scaffold phase: everything except the acceptance-test stubs
+python -m pytest               # full suite; AT stubs fail until implemented
 ```
+
+The tests run in development mode on SQLite automatically; no environment variables are needed.
 
 Acceptance tests (`tests/test_at_*.py`) and rules (`rules/`) are AI-owned and are never
 overwritten when the solution is regenerated.

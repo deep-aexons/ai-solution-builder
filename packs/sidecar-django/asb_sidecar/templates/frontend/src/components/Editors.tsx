@@ -77,7 +77,8 @@ function LinkInput({ meta, field, values, onChange, disabled, prefix }: EditorPr
 }
 
 function Scalar(props: EditorProps) {
-  const { field, values, onChange, onFile, disabled, prefix } = props;
+  const { field, values, onChange, onFile, prefix } = props;
+  const disabled = props.disabled || field.read_only;
   const tid = prefix + field.name;
   const set = (v: unknown) => onChange({ [field.name]: v });
   const value = values[field.name];
@@ -109,7 +110,7 @@ function Scalar(props: EditorProps) {
         </select>
       );
     case "link":
-      return <LinkInput {...props} />;
+      return <LinkInput {...props} disabled={disabled} />;
     case "external_ref": {
       const kind = field.name + "_kind";
       const id = field.name + "_id";

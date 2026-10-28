@@ -57,10 +57,11 @@ export function scalarPayload(
   fields: FieldMeta[],
   values: Row,
   mode: "create" | "update",
+  includeReadOnly = false,
 ): Row {
   const out: Row = {};
   for (const f of fields) {
-    if (f.read_only || f.type === "table" || f.type === "attachment") continue;
+    if ((f.read_only && !includeReadOnly) || f.type === "table" || f.type === "attachment") continue;
     if (f.type === "external_ref") {
       out[f.name + "_kind"] = values[f.name + "_kind"] ?? "";
       out[f.name + "_id"] = values[f.name + "_id"] ?? "";

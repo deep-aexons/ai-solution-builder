@@ -25,6 +25,14 @@ ALLOWED_HOSTS = [
     if h.strip()
 ]
 
+_TRUE = ("1", "true", "yes", "on")
+# Set when serving over HTTPS (also behind a TLS-terminating proxy).
+CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", "").lower() in _TRUE
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "").lower() in _TRUE
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
+]
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",

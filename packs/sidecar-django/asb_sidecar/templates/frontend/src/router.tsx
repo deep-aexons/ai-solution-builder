@@ -8,6 +8,19 @@ export function navigate(to: string): void {
   window.dispatchEvent(new Event(EVENT));
 }
 
+let flash = "";
+
+/** A message shown once by the next page that calls takeFlash (survives navigate()). */
+export function setFlash(message: string): void {
+  flash = message;
+}
+
+export function takeFlash(): string {
+  const message = flash;
+  flash = "";
+  return message;
+}
+
 export function useLocation(): { path: string; search: string } {
   const read = () => ({ path: window.location.pathname, search: window.location.search });
   const [loc, setLoc] = useState(read);

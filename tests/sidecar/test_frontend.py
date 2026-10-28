@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -358,3 +359,100 @@ def test_compose_stack_serves_the_ui(app, tmp_path):
         assert httpx.get("http://localhost:8000/api/meta/").status_code == 403
     finally:
         subprocess.run(["docker", "compose", "down", "-v"], cwd=work, check=False)
+
+
+def _clean_env() -> dict[str, str]:
+    drop = {"DEBUG", "SECRET_KEY", "DATABASE_URL", "DJANGO_SETTINGS_MODULE"}
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
+
+
+def test_documented_pytest_commands_run_in_a_clean_environment(app, tmp_path):
+    """The exact commands in the README's Tests section work without DEBUG/SECRET_KEY."""
+    text = (app / "README.md").read_text(encoding="utf-8")
+    block = text.split("## Tests", 1)[1].split("```sh", 1)[1].split("```", 1)[0]
+    commands = [
+        ln.split("#", 1)[0].strip()
+        for ln in block.splitlines()
+        if ln.strip().startswith("python -m pytest")
+    ]
+    assert commands == ['python -m pytest -m "not at"', "python -m pytest"]
+    backend = tmp_path / "backend"
+    shutil.copytree(app / "backend", backend)
+    for cmd in commands:
+        argv = shlex.split(cmd)
+        argv[0] = sys.executable
+        argv += ["-q", "-p", "no:cacheprovider"]
+        proc = subprocess.run(
+            argv,
+            cwd=backend,
+            env=_clean_env(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        out = proc.stdout + proc.stderr
+        if cmd.endswith('"not at"'):
+            assert proc.returncode == 0, out
+        else:
+            # Only the AT stubs (pytest.fail "not implemented") may fail.
+            failed = [ln for ln in out.splitlines() if ln.startswith("FAILED")]
+            assert failed, out
+            assert all("test_at_" in ln for ln in failed), out
+            assert "error" not in out.splitlines()[-1].lower(), out
+
+
+def _settings_code() -> str:
+    return (
+        "import json, django; django.setup(); from django.conf import settings as s;"
+        "print('R' + json.dumps([s.CSRF_COOKIE_SECURE, s.SESSION_COOKIE_SECURE,"
+        " s.CSRF_TRUSTED_ORIGINS]))"
+    )
+
+
+def test_cookie_and_origin_env_toggles(app):
+    backend = app / "backend"
+
+    def run(**extra: str) -> list:
+        env = {
+            **_clean_env(),
+            "DEBUG": "1",
+            "DJANGO_SETTINGS_MODULE": "config.settings",
+        }
+        env.update(extra)
+        code = _settings_code()
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=backend,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        line = next(ln for ln in proc.stdout.splitlines() if ln.startswith("R"))
+        return json.loads(line[1:])
+
+    assert run() == [False, False, []]
+    assert run(
+        CSRF_COOKIE_SECURE="1",
+        SESSION_COOKIE_SECURE="true",
+        CSRF_TRUSTED_ORIGINS="https://a.example, https://b.example",
+    ) == [True, True, ["https://a.example", "https://b.example"]]
+    env_example = (app / ".env.example").read_text(encoding="utf-8")
+    for var in ("CSRF_TRUSTED_ORIGINS", "SESSION_COOKIE_SECURE", "CSRF_COOKIE_SECURE"):
+        assert var in env_example
+    readme = (app / "README.md").read_text(encoding="utf-8")
+    assert "change the Postgres credentials" in readme
+
+
+def test_frontend_source_fixes(app):
+    src = app / "frontend/src"
+    form = (src / "pages/Form.tsx").read_text(encoding="utf-8")
+    assert 'scalarPayload(fields, actionValues, "update", true)' in form
+    assert "setFlash(" in form and "takeFlash()" in form
+    assert "props.disabled || field.read_only" in (
+        src / "components/Editors.tsx"
+    ).read_text(encoding="utf-8")
+    assert '"/api/auth/csrf/"' in (src / "api.ts").read_text(encoding="utf-8")
