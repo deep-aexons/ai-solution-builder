@@ -62,9 +62,29 @@ def test_bad_ids(tmp_path, key, idx, val):
     assert f"{key}.{idx}.id" in exc.value.issues[0]
 
 
-def test_workflow_single_mapping_normalised(tmp_path):
+def test_workflow_single_mapping_normalised():
     sol = load_solution(FIX / "gate_pass.yaml")
-    assert sol.workflow == sol.workflows
+    assert isinstance(sol.workflow, list)
+    assert len(sol.workflows) == 1
+    assert sol.workflows[0].entity == "gate_pass"
+
+
+def test_workflow_list_of_two(tmp_path):
+    def mutate(d):
+        second = dict(d["workflow"], entity="gate_pass_line")
+        d["workflow"] = [d["workflow"], second]
+
+    sol = load_solution(_load_dict(tmp_path, mutate))
+    assert len(sol.workflows) == 2
+    assert [w.entity for w in sol.workflows] == ["gate_pass", "gate_pass_line"]
+
+
+def test_non_utf8_file_raises_model_error(tmp_path):
+    p = tmp_path / "s.yaml"
+    p.write_bytes(b"solution: \xff\xfe\x00bad\n")
+    with pytest.raises(ModelError) as exc:
+        load_solution(p)
+    assert str(p) in exc.value.issues[0]
 
 
 def test_bad_name(tmp_path):

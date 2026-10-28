@@ -180,8 +180,8 @@ def _issues(err: ValidationError) -> list[str]:
 def load_solution(path: Path) -> Solution:
     path = Path(path)
     try:
-        data = yaml.safe_load(path.read_text())
-    except (OSError, yaml.YAMLError) as exc:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise ModelError([f"{path}: {exc}"]) from exc
     if not isinstance(data, dict):
         raise ModelError([f"{path}: top level must be a mapping"])
