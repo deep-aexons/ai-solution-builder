@@ -42,8 +42,8 @@ class Pack:
     ) -> GenerateResult:
         return self.module.generate(solution, solution_dir, **kwargs)
 
-    def verify(self, solution: Any, solution_dir: Path) -> VerifyResult:
-        return self.module.verify(solution, solution_dir)
+    def verify(self, solution: Any, solution_dir: Path, **kwargs: Any) -> VerifyResult:
+        return self.module.verify(solution, solution_dir, **kwargs)
 
 
 @dataclass

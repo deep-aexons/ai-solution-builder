@@ -15,14 +15,18 @@ from asb.status import (
     GateError,
     approve,
     clear_active,
+    increment_verify_rounds,
     load_status,
     log_event,
+    mark_done,
     new_solution,
     require,
+    reset_verify,
     set_active,
     valid_name,
 )
 from asb.validate import validate
+from asb.verify_report import passed, render_report
 
 app = typer.Typer(
     name="asb",
@@ -240,3 +244,103 @@ def use_cmd(
     _sol_dir(root, name)
     set_active(base, name)
     typer.echo(f"active solution: {name}")
+
+
+def _base(root: Path | None) -> Path:
+    return root if root is not None else Path.cwd()
+
+
+@app.command("build")
+def build_cmd(
+    name: Annotated[str, typer.Argument(help="Solution name.")],
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Generate the app from the approved design (stage 4)."""
+    sol_dir = _sol_dir(root, name)
+    base = _base(root)
+    try:
+        require(sol_dir, "build")
+    except GateError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+    try:
+        solution = load_solution(sol_dir / "design" / "solution.yaml")
+        pack = load_pack(base, load_status(sol_dir).pack)
+    except ModelError as exc:
+        for issue in exc.issues:
+            typer.echo(issue)
+        raise typer.Exit(1) from exc
+    except (GateError, FileNotFoundError, ValueError, ImportError) as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
+    issues = validate(solution, pack.capabilities)
+    if issues:
+        for issue in issues:
+            typer.echo(str(issue))
+        log_event(sol_dir, "build_failed", f"validation issues={len(issues)}")
+        raise typer.Exit(1)
+    try:
+        result = pack.generate(solution, sol_dir, root=base)
+    except Exception as exc:
+        typer.echo(f"error: build failed: {exc}")
+        log_event(sol_dir, "build_failed", type(exc).__name__)
+        raise typer.Exit(1) from exc
+    mark_done(sol_dir, "build")
+    reset_verify(sol_dir)
+    set_active(base, name)
+    log_event(
+        sol_dir,
+        "build",
+        f"written={len(result.written)} skipped_ai_owned={len(result.skipped_ai_owned)}",
+    )
+    typer.echo(
+        f"built {name}: {len(result.written)} generated file(s) written, "
+        f"{len(result.skipped_ai_owned)} AI-owned file(s) kept"
+    )
+
+
+@app.command("verify")
+def verify_cmd(
+    name: Annotated[str, typer.Argument(help="Solution name.")],
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Run all automated evidence and write verify-report.md (stage 5)."""
+    sol_dir = _sol_dir(root, name)
+    base = _base(root)
+    try:
+        require(sol_dir, "verify")
+    except GateError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+    try:
+        solution = load_solution(sol_dir / "design" / "solution.yaml")
+        pack = load_pack(base, load_status(sol_dir).pack)
+    except (ModelError, GateError, FileNotFoundError, ValueError, ImportError) as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
+    round_no = increment_verify_rounds(sol_dir)
+    try:
+        result = pack.verify(solution, sol_dir, root=base)
+    except Exception as exc:
+        typer.echo(f"error: verify crashed: {exc}")
+        log_event(sol_dir, "verify_failed", f"round={round_no} {type(exc).__name__}")
+        raise typer.Exit(1) from exc
+    (sol_dir / "verify-report.md").write_text(
+        render_report(name, round_no, result), encoding="utf-8"
+    )
+    ok = passed(result)
+    n_fail = sum(1 for c in result.checks if c.status == "fail")
+    n_pass = sum(1 for c in result.checks if c.status == "pass")
+    log_event(
+        sol_dir,
+        "verify",
+        f"round={round_no} result={'pass' if ok else 'fail'} pass={n_pass} fail={n_fail}",
+    )
+    for c in result.checks:
+        typer.echo(f"{c.name:<20}{c.status:<9}{(c.details.splitlines() or [''])[0]}")
+    if ok:
+        mark_done(sol_dir, "verify")
+        typer.echo(f"PASS: see {sol_dir / 'verify-report.md'}")
+        return
+    typer.echo(f"FAIL: {n_fail} check(s) failed; see {sol_dir / 'verify-report.md'}")
+    raise typer.Exit(1)

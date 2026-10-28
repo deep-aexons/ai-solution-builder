@@ -377,7 +377,10 @@ def test_documented_pytest_commands_run_in_a_clean_environment(app, tmp_path):
         for ln in block.splitlines()
         if ln.strip().startswith("python -m pytest")
     ]
-    assert commands == ['python -m pytest -m "not at"', "python -m pytest"]
+    assert commands == [
+        'python -m pytest -m "not at and not report"',
+        "python -m pytest",
+    ]
     backend = tmp_path / "backend"
     shutil.copytree(app / "backend", backend)
     for cmd in commands:
@@ -393,13 +396,15 @@ def test_documented_pytest_commands_run_in_a_clean_environment(app, tmp_path):
             check=False,
         )
         out = proc.stdout + proc.stderr
-        if cmd.endswith('"not at"'):
+        if cmd.endswith('"not at and not report"'):
             assert proc.returncode == 0, out
         else:
-            # Only the AT stubs (pytest.fail "not implemented") may fail.
+            # Only the AT stubs and report smoke (not implemented) may fail.
             failed = [ln for ln in out.splitlines() if ln.startswith("FAILED")]
             assert failed, out
-            assert all("test_at_" in ln for ln in failed), out
+            assert all(
+                ("test_at_" in ln or "test_reports_smoke" in ln) for ln in failed
+            ), out
             assert "error" not in out.splitlines()[-1].lower(), out
 
 

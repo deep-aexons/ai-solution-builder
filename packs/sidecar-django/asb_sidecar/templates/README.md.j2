@@ -97,8 +97,8 @@ the API.
 ```sh
 cd backend
 pip install -r requirements.txt
-python -m pytest -m "not at"   # scaffold phase: everything except the acceptance-test stubs
-python -m pytest               # full suite; AT stubs fail until implemented
+python -m pytest -m "not at and not report"   # scaffold phase: everything except the AT stubs and report smoke
+python -m pytest                              # full suite; AT stubs and unimplemented reports fail
 ```
 
 The tests run in development mode on SQLite automatically; no environment variables are needed.

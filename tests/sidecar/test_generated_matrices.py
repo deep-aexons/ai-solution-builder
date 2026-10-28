@@ -67,7 +67,9 @@ def _counts(out: str) -> dict[str, int]:
 @pytest.mark.parametrize("fixture", ["gate_pass.yaml", "mini_docs.yaml"])
 def test_matrices_pass_with_rules_stubbed(tmp_path, fixture):
     generate(load_solution(FIXTURES / fixture), tmp_path)
-    proc = _pytest(tmp_path / "app/backend", "tests", "-m", "not at", "-rs")
+    proc = _pytest(
+        tmp_path / "app/backend", "tests", "-m", "not at and not report", "-rs"
+    )
     out = proc.stdout + proc.stderr
     assert proc.returncode == 0, out
     assert "warnings summary" not in out, out
@@ -78,7 +80,9 @@ def test_matrices_pass_with_rules_stubbed(tmp_path, fixture):
 
 def test_gate_pass_matrix_size_and_skips(tmp_path):
     generate(load_solution(FIXTURES / "gate_pass.yaml"), tmp_path)
-    out = _pytest(tmp_path / "app/backend", "tests", "-m", "not at", "-rs", "-v")
+    out = _pytest(
+        tmp_path / "app/backend", "tests", "-m", "not at and not report", "-rs", "-v"
+    )
     text = out.stdout
     # 3 roles x 1 entity x 7 permissions, 4 transitions x 3 roles (+4 wrong-state), 3 roles x 1 report
     assert text.count("test_permission_matrix.py::test_permission[") == 21
@@ -97,7 +101,9 @@ def test_gate_pass_matrix_size_and_skips(tmp_path):
 
 def test_mini_docs_exercises_every_permission(tmp_path):
     generate(load_solution(FIXTURES / "mini_docs.yaml"), tmp_path)
-    proc = _pytest(tmp_path / "app/backend", "tests", "-m", "not at", "-v", "-rs")
+    proc = _pytest(
+        tmp_path / "app/backend", "tests", "-m", "not at and not report", "-v", "-rs"
+    )
     text = proc.stdout
     assert proc.returncode == 0, text
     for perm in (
@@ -125,7 +131,9 @@ def test_at_stubs_fail_until_implemented(tmp_path):
         assert f"AT-0{n} not implemented" in out
     assert "warnings summary" not in out, out
     full = _pytest(backend, "tests")
-    assert full.returncode != 0 and _counts(full.stdout)["failed"] == 6
+    # six AT stubs plus the report smoke test (the report body is not implemented yet)
+    assert full.returncode != 0 and _counts(full.stdout)["failed"] == 7
+    assert "test_reports_smoke.py::test_report_runs[gate_register]" in full.stdout
     assert _counts(full.stdout)["passed"] > 30
 
 
@@ -163,14 +171,16 @@ def test_rules_reports_and_export_in_generated_gate_pass_app(tmp_path):
     assert proc.returncode == 0, out
     assert "warnings summary" not in out, out
     # the generated matrices still pass with the real rules, thanks to rules_noop
-    again = _pytest(backend, "tests", "-m", "not at")
+    again = _pytest(backend, "tests", "-m", "not at and not report")
     assert again.returncode == 0, again.stdout
 
 
 def test_linked_entities_are_fully_exercised(tmp_path):
     """Required links, attachments, unique and patterned fields never cause skips."""
     generate(load_solution(FIXTURES / "linked_docs.yaml"), tmp_path)
-    proc = _pytest(tmp_path / "app/backend", "tests", "-m", "not at", "-v", "-rs")
+    proc = _pytest(
+        tmp_path / "app/backend", "tests", "-m", "not at and not report", "-v", "-rs"
+    )
     text = proc.stdout
     assert proc.returncode == 0, text
     assert "sample-incomplete" not in text, text
@@ -212,7 +222,9 @@ def test_required_link_cycle_via_second_link_is_tagged_not_recursed(tmp_path):
     from asb.model import Solution
 
     generate(Solution.model_validate(data), tmp_path)
-    proc = _pytest(tmp_path / "app/backend", "tests", "-m", "not at", "-rs")
+    proc = _pytest(
+        tmp_path / "app/backend", "tests", "-m", "not at and not report", "-rs"
+    )
     out = proc.stdout
     assert proc.returncode == 0, out
     assert "sample-incomplete: a: required link cycle a -> b -> a" in out, out

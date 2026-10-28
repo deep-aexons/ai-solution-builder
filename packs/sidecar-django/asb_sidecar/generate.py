@@ -74,6 +74,7 @@ LAYER_FILES = (
     "tests/conftest.py",
     "tests/test_permission_matrix.py",
     "tests/test_workflow_matrix.py",
+    "tests/test_reports_smoke.py",
     "entities/management/commands/asb_sync_roles.py",
 )
 PACKAGE_MARKERS = (

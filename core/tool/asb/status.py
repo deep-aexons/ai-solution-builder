@@ -157,6 +157,15 @@ def increment_verify_rounds(sol_dir: Path) -> int:
     return st.verify_rounds
 
 
+def reset_verify(sol_dir: Path) -> None:
+    """A new build starts a new verify cycle: rounds back to 0, verify stage to todo."""
+    st = load_status(sol_dir)
+    st.verify_rounds = 0
+    st.stages["verify"] = "todo"
+    save_status(sol_dir, st)
+    log_event(sol_dir, "verify_reset", "new build")
+
+
 def approve(sol_dir: Path, kind: str, by: str) -> Approval:
     sol_dir = Path(sol_dir)
     if kind not in APPROVAL_KINDS:

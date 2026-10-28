@@ -52,8 +52,11 @@ def test_load_sidecar_pack():
 def test_pack_methods_proxy_to_module():
     pack = load_pack(REPO, "sidecar-django")
     assert pack.module.generate.__module__ == "asb_sidecar.generate"
-    with pytest.raises(NotImplementedError, match="later task"):
-        pack.verify(None, Path("."))
+    assert pack.module.verify.__module__ == "asb_sidecar.verify"
+    # verify is a real check suite now; it forwards kwargs and reports a missing app
+    result = pack.verify(None, Path("."), root=Path("."))
+    assert [c.name for c in result.checks] == ["acceptance_mapping"]
+    assert result.checks[0].status == "fail"
 
 
 def test_unknown_pack_names_path(tmp_path):
