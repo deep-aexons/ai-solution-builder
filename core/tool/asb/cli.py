@@ -7,6 +7,7 @@ import typer
 
 from asb import __version__
 from asb.model import ModelError, load_solution
+from asb.plugins import load_pack
 from asb.status import (
     APPROVAL_KINDS,
     STAGES,
@@ -54,6 +55,10 @@ def validate_cmd(
             help="Solution folder (reads design/solution.yaml) or a solution file."
         ),
     ],
+    root: Annotated[
+        Path | None,
+        typer.Option("--root", help="Project root containing packs/ (default: cwd)."),
+    ] = None,
 ) -> None:
     """Validate a solution model before code generation."""
     path = (
@@ -67,7 +72,17 @@ def validate_cmd(
         for issue in exc.issues:
             typer.echo(issue)
         raise typer.Exit(1) from exc
-    issues = validate(solution)
+    capabilities = None
+    if solution_dir.is_dir() and (solution_dir / "status.json").exists():
+        try:
+            pack = load_pack(
+                root if root is not None else Path.cwd(), load_status(solution_dir).pack
+            )
+        except (GateError, FileNotFoundError, ValueError, ImportError) as exc:
+            typer.echo(f"error: {exc}")
+            raise typer.Exit(1) from exc
+        capabilities = pack.capabilities
+    issues = validate(solution, capabilities)
     if issues:
         for issue in issues:
             typer.echo(str(issue))

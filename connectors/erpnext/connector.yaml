@@ -1,0 +1,8 @@
+name: erpnext
+entry: asb_erpnext
+kinds:
+  outbound_shipment: Delivery Note
+  inbound_receipt: Purchase Receipt
+  customer: Customer
+  supplier: Supplier
+  item: Item

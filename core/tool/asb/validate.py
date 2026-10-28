@@ -225,18 +225,48 @@ def _check_traceability(sol: Solution, out: list[Issue]) -> None:
 
 def _check_capabilities(sol: Solution, caps: dict[str, Any], out: list[Issue]) -> None:
     allowed = caps.get("field_types")
-    if allowed is None:
-        return
-    for i, e in enumerate(sol.entities):
-        for j, f in enumerate(e.fields):
-            if f.type not in allowed:
-                out.append(
-                    Issue(
-                        "CAPABILITY",
-                        f"entities.{i}.fields.{j}.type",
-                        f"field type '{f.type}' is not supported by the target pack",
+    if allowed is not None:
+        for i, e in enumerate(sol.entities):
+            for j, f in enumerate(e.fields):
+                if f.type not in allowed:
+                    out.append(
+                        Issue(
+                            "CAPABILITY",
+                            f"entities.{i}.fields.{j}.type",
+                            f"field type '{f.type}' is not supported by the target pack",
+                        )
                     )
-                )
+    perms_ok = caps.get("permissions")
+    if perms_ok is not None:
+        for role, targets in sol.roles.items():
+            for target, perms in targets.items():
+                if target == "reports":
+                    continue
+                for perm in perms:
+                    if perm not in perms_ok:
+                        out.append(
+                            Issue(
+                                "CAPABILITY",
+                                f"roles.{role}.{target}",
+                                f"permission '{perm}' is not supported by the target pack",
+                            )
+                        )
+    if sol.workflows and caps.get("workflow") is False:
+        out.append(
+            Issue(
+                "CAPABILITY",
+                "workflow",
+                "workflow is not supported by the target pack",
+            )
+        )
+    if sol.reports and caps.get("reports") is False:
+        out.append(
+            Issue(
+                "CAPABILITY",
+                "reports",
+                "reports are not supported by the target pack",
+            )
+        )
 
 
 def validate(

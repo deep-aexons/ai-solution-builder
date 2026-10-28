@@ -1,0 +1,6 @@
+name: sidecar-django
+entry: asb_sidecar
+field_types: [text, number, decimal, money, date, datetime, choice, boolean, attachment, link, external_ref, table]
+workflow: true
+reports: true
+permissions: [create, read, update, update_own_draft, delete, approve, export]
