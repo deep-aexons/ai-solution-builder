@@ -1,8 +1,13 @@
 """Typer entry point for the asb command."""
 
+from pathlib import Path
+from typing import Annotated
+
 import typer
 
 from asb import __version__
+from asb.model import ModelError, load_solution
+from asb.validate import validate
 
 app = typer.Typer(
     name="asb",
@@ -29,3 +34,32 @@ def main(
     ),
 ) -> None:
     """AI Solution Builder command-line tool."""
+
+
+@app.command("validate")
+def validate_cmd(
+    solution_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Solution folder (reads design/solution.yaml) or a solution file."
+        ),
+    ],
+) -> None:
+    """Validate a solution model before code generation."""
+    path = (
+        solution_dir
+        if solution_dir.is_file()
+        else solution_dir / "design" / "solution.yaml"
+    )
+    try:
+        solution = load_solution(path)
+    except ModelError as exc:
+        for issue in exc.issues:
+            typer.echo(issue)
+        raise typer.Exit(1) from exc
+    issues = validate(solution)
+    if issues:
+        for issue in issues:
+            typer.echo(str(issue))
+        raise typer.Exit(1)
+    typer.echo("OK: no issues")
