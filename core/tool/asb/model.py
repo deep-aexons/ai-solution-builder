@@ -177,15 +177,24 @@ def _issues(err: ValidationError) -> list[str]:
     return out
 
 
-def load_solution(path: Path) -> Solution:
-    path = Path(path)
+def parse_solution(raw: bytes, label: str | Path = "<bytes>") -> Solution:
+    """Parse and validate solution YAML from raw bytes."""
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise ModelError([f"{path}: {exc}"]) from exc
+        data = yaml.safe_load(raw.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ModelError([f"{label}: {exc}"]) from exc
     if not isinstance(data, dict):
-        raise ModelError([f"{path}: top level must be a mapping"])
+        raise ModelError([f"{label}: top level must be a mapping"])
     try:
         return Solution.model_validate(data)
     except ValidationError as exc:
         raise ModelError(_issues(exc)) from exc
+
+
+def load_solution(path: Path) -> Solution:
+    path = Path(path)
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ModelError([f"{path}: {exc}"]) from exc
+    return parse_solution(raw, path)

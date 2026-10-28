@@ -1,22 +1,28 @@
-"""Per-solution status, approvals and stage gates."""
+"""Per-solution status, approvals and stage gates.
+
+Status files assume one asb process per solution at a time (no locking).
+"""
 
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from asb.model import ModelError, load_solution
+from asb.model import ModelError, parse_solution
 
 STAGES = ["requirements", "discovery", "design", "build", "verify", "release"]
 MAX_VERIFY_ROUNDS = 3
 _NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
 
 ApprovalKind = Literal["requirements", "design", "client", "golive"]
+APPROVAL_KINDS: tuple[str, ...] = ApprovalKind.__args__  # type: ignore[attr-defined]
 
 
 class GateError(Exception):
@@ -53,17 +59,30 @@ def log_event(sol_dir: Path, event: str, detail: str) -> None:
 
 def load_status(sol_dir: Path) -> Status:
     path = Path(sol_dir) / "status.json"
-    return Status.model_validate_json(path.read_text(encoding="utf-8"))
+    try:
+        return Status.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValidationError) as exc:
+        first = (str(exc).splitlines() or [type(exc).__name__])[0]
+        raise GateError(f"status.json is corrupt: {first}") from exc
 
 
 def save_status(sol_dir: Path, status: Status) -> None:
-    (Path(sol_dir) / "status.json").write_text(
-        status.model_dump_json(indent=2) + "\n", encoding="utf-8"
-    )
+    """Write status.json atomically (temp file, fsync, replace)."""
+    sol_dir = Path(sol_dir)
+    fd, tmp = tempfile.mkstemp(dir=sol_dir, prefix=".status-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(status.model_dump_json(indent=2) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, sol_dir / "status.json")
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def new_solution(root: Path, name: str, pack: str, connector: str | None) -> Path:
-    if not _NAME_RE.fullmatch(name):
+    if not valid_name(name):
         raise ValueError(f"invalid solution name '{name}': use ^[a-z][a-z0-9-]*$")
     sol_dir = Path(root) / "solutions" / name
     if sol_dir.exists():
@@ -111,14 +130,19 @@ def increment_verify_rounds(sol_dir: Path) -> int:
 
 def approve(sol_dir: Path, kind: str, by: str) -> Approval:
     sol_dir = Path(sol_dir)
+    if kind not in APPROVAL_KINDS:
+        raise ValueError(
+            f"unknown approval kind '{kind}'; allowed: {', '.join(APPROVAL_KINDS)}"
+        )
     version: str | None = None
     digest: str | None = None
     if kind == "design":
         path = sol_dir / "design" / "solution.yaml"
         if not path.is_file():
             _fail(sol_dir, "approve design", "design/solution.yaml does not exist")
+        raw = path.read_bytes()
         try:
-            sol = load_solution(path)
+            sol = parse_solution(raw, path)
         except ModelError as exc:
             _fail(
                 sol_dir,
@@ -126,9 +150,9 @@ def approve(sol_dir: Path, kind: str, by: str) -> Approval:
                 "design/solution.yaml is invalid: " + "; ".join(exc.issues),
             )
         version = str(sol.version)
-        digest = model_hash(path)
+        digest = hashlib.sha256(raw).hexdigest()
     approval = Approval(
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         by=by,
         at=_now(),
         model_version=version,
@@ -139,6 +163,10 @@ def approve(sol_dir: Path, kind: str, by: str) -> Approval:
     save_status(sol_dir, st)
     log_event(sol_dir, "approve", f"{kind} by {by} hash={digest}")
     return approval
+
+
+def valid_name(name: str) -> bool:
+    return bool(_NAME_RE.fullmatch(name))
 
 
 def _fail(sol_dir: Path, what: str, message: str):

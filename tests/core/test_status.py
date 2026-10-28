@@ -171,3 +171,42 @@ def test_cli_flow(tmp_path):
     assert "verify_rounds" in res.output
     assert r.invoke(app, ["status", "missing", *root]).exit_code == 1
     assert r.invoke(app, ["new", "Bad", "--pack", "p", *root]).exit_code == 1
+
+
+def test_corrupt_status_raises_gate_error(sol):
+    (sol / "status.json").write_text("{not json")
+    with pytest.raises(GateError, match="status.json is corrupt"):
+        load_status(sol)
+    (sol / "status.json").write_text('{"solution": 1}')
+    with pytest.raises(GateError, match="status.json is corrupt"):
+        require(sol, "design")
+
+
+def test_save_leaves_no_temp_files(sol):
+    save_status(sol, load_status(sol))
+    assert sorted(p.name for p in sol.iterdir()) == [
+        "audit.log",
+        "design",
+        "discovery.md",
+        "requirements.md",
+        "status.json",
+    ]
+
+
+def test_approve_unknown_kind(sol):
+    with pytest.raises(ValueError, match="requirements"):
+        approve(sol, "bogus", "x")
+
+
+def test_cli_rejects_bad_names_and_corrupt_status(tmp_path):
+    r = CliRunner()
+    root = ["--root", str(tmp_path)]
+    res = r.invoke(app, ["status", "../x", *root])
+    assert res.exit_code == 1 and "invalid solution name" in res.output
+    d = new_solution(tmp_path, "ok", "p", None)
+    (d / "status.json").write_text("garbage")
+    res = r.invoke(app, ["status", "ok", *root])
+    assert res.exit_code == 1 and "corrupt" in res.output
+    assert "Traceback" not in res.output
+    res = r.invoke(app, ["approve", "ok", "bogus", "--by", "x", *root])
+    assert res.exit_code == 1

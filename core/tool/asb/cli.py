@@ -8,12 +8,14 @@ import typer
 from asb import __version__
 from asb.model import ModelError, load_solution
 from asb.status import (
+    APPROVAL_KINDS,
     STAGES,
     GateError,
     approve,
     load_status,
     new_solution,
     require,
+    valid_name,
 )
 from asb.validate import validate
 
@@ -80,6 +82,9 @@ RootOpt = Annotated[
 
 
 def _sol_dir(root: Path | None, name: str) -> Path:
+    if not valid_name(name):
+        typer.echo(f"error: invalid solution name '{name}'")
+        raise typer.Exit(1)
     path = (root if root is not None else Path.cwd()) / "solutions" / name
     if not (path / "status.json").is_file():
         typer.echo(f"error: no solution '{name}' under {path.parent}")
@@ -113,7 +118,11 @@ def status_cmd(
     root: RootOpt = None,  # type: ignore[assignment]
 ) -> None:
     """Show stages, approvals and fix-loop rounds."""
-    st = load_status(_sol_dir(root, name))
+    try:
+        st = load_status(_sol_dir(root, name))
+    except GateError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
     typer.echo(f"solution: {st.solution}  pack: {st.pack}  connector: {st.connector}")
     typer.echo("stages:")
     for stage in STAGES:
@@ -130,19 +139,14 @@ def status_cmd(
 @app.command("approve")
 def approve_cmd(
     name: Annotated[str, typer.Argument(help="Solution name.")],
-    kind: Annotated[
-        str, typer.Argument(help="requirements | design | client | golive")
-    ],
+    kind: Annotated[str, typer.Argument(help=" | ".join(APPROVAL_KINDS))],
     by: Annotated[str, typer.Option("--by", help="Who approves.")],
     root: RootOpt = None,  # type: ignore[assignment]
 ) -> None:
     """Record an approval."""
-    if kind not in ("requirements", "design", "client", "golive"):
-        typer.echo(f"error: unknown approval kind '{kind}'")
-        raise typer.Exit(1)
     try:
         approve(_sol_dir(root, name), kind, by)
-    except GateError as exc:
+    except (GateError, ValueError) as exc:
         typer.echo(f"error: {exc}")
         raise typer.Exit(1) from exc
     typer.echo(f"approved {kind} by {by}")
