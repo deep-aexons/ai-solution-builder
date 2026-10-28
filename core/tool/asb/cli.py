@@ -7,8 +7,10 @@ import typer
 
 from asb import __version__
 from asb.checks import load_policy, read_anchor, run_checks
-from asb.model import ModelError, load_solution
-from asb.plugins import load_pack
+from asb.connector import ConnectorError
+from asb.discover import run_discovery
+from asb.model import External, ModelError, Solution, load_solution
+from asb.plugins import load_connector, load_pack
 from asb.status import (
     APPROVAL_KINDS,
     STAGES,
@@ -355,3 +357,81 @@ def verify_cmd(
     mark_todo(sol_dir, "verify")  # a failed round never leaves a stale "done"
     typer.echo(f"FAIL: {n_fail} check(s) failed; see {sol_dir / 'verify-report.md'}")
     raise typer.Exit(1)
+
+
+@app.command("discover")
+def discover_cmd(
+    name: Annotated[str, typer.Argument(help="Solution name.")],
+    kind: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--kind",
+            help="External kind to check (repeatable); used when no design exists yet.",
+        ),
+    ] = None,
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Inspect the client's system and write discovery.md (stage 2)."""
+    sol_dir = _sol_dir(root, name)
+    base = _base(root)
+    try:
+        status = load_status(sol_dir)
+    except GateError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
+    if status.connector is None:
+        typer.echo(f"error: no connector configured for {name}")
+        raise typer.Exit(1)
+    model_path = sol_dir / "design" / "solution.yaml"
+    if model_path.is_file():
+        try:
+            solution = load_solution(model_path)
+        except ModelError as exc:
+            for issue in exc.issues:
+                typer.echo(issue)
+            raise typer.Exit(1) from exc
+    elif kind:
+        solution = Solution.model_construct(
+            solution=name,
+            external=[External(name=k, kind=k, access="read") for k in kind],
+        )
+    else:
+        typer.echo(
+            "error: no design/solution.yaml yet; pass --kind <kind> "
+            "(repeatable) to say which external data to check"
+        )
+        raise typer.Exit(1)
+    connector = None
+    error: Exception | None = None
+    try:
+        info = load_connector(base, status.connector)
+        # Discovery never writes: no write operations are allowed.
+        connector = info.module.from_env(allowed_writes=frozenset())
+    except (FileNotFoundError, ValueError, ImportError) as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
+    except ConnectorError as exc:
+        error = exc
+    report = run_discovery(solution, connector, error)
+    (sol_dir / "discovery.md").write_text(report.markdown, encoding="utf-8")
+    log_event(
+        sol_dir,
+        "discover",
+        f"connected={report.connected} gaps={report.gaps}",
+    )
+    if not report.connected:
+        head = next(
+            (
+                ln
+                for ln in report.markdown.splitlines()
+                if ln.startswith("Connection failed")
+            ),
+            "Connection failed",
+        )
+        typer.echo(head)
+        typer.echo(f"wrote {sol_dir / 'discovery.md'}; discovery not marked done")
+        raise typer.Exit(1)
+    mark_done(sol_dir, "discovery")
+    typer.echo(f"wrote {sol_dir / 'discovery.md'}")
+    if report.gaps:
+        typer.echo(f"warning: {report.gaps} gap(s) found; see discovery.md")
