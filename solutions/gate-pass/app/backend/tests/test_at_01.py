@@ -14,7 +14,9 @@ def test_at_01(api, fake_erp):
     resp = create(store, ref="DN-DRAFT")
     assert resp.status_code == 400, resp.content
     assert resp.json()["rule"] == "R1"
-    assert resp.json()["detail"] == "outbound_shipment DN-DRAFT not found or not submitted"
+    assert (
+        resp.json()["detail"] == "outbound_shipment DN-DRAFT not found or not submitted"
+    )
     assert GatePass.objects.count() == 0  # refused, nothing saved
 
     seed(fake_erp, "outbound_shipment", "DN-OK")
@@ -22,16 +24,38 @@ def test_at_01(api, fake_erp):
 
 
 @pytest.mark.at("AT-01")
-def test_at_01_unknown_and_wrong_kind(api, fake_erp):
+def test_at_01_unknown_and_cross_kind(api, fake_erp):
     store = api("store_user")
     resp = create(store, ref="DN-MISSING")
     assert resp.status_code == 400
-    assert resp.json()["detail"] == "outbound_shipment DN-MISSING not found or not submitted"
-    # an outward pass must reference a delivery note, not a purchase receipt
-    bad = {"delivery_note_kind": "", "delivery_note_id": ""}
-    resp = create(store, ref="PR-1", **bad)
+    assert (
+        resp.json()["detail"]
+        == "outbound_shipment DN-MISSING not found or not submitted"
+    )
+    # cross-kind: an outward pass carrying only a (submitted) purchase receipt
+    seed(fake_erp, "inbound_receipt", "PR-1")
+    cross = {
+        "delivery_note_kind": "",
+        "delivery_note_id": "",
+        "purchase_receipt_kind": "purchase_receipt",
+        "purchase_receipt_id": "PR-1",
+    }
+    resp = create(store, direction="outbound", **cross)
     assert resp.status_code == 400
     assert resp.json()["rule"] == "R1"
+    assert "delivery note" in resp.json()["detail"]
+    # and the reverse: an inward pass carrying only a delivery note
+    seed(fake_erp, "outbound_shipment", "DN-1")
+    back = {
+        "delivery_note_kind": "delivery_note",
+        "delivery_note_id": "DN-1",
+        "purchase_receipt_kind": "",
+        "purchase_receipt_id": "",
+    }
+    resp = create(store, direction="inbound", **back)
+    assert resp.status_code == 400
+    assert "purchase receipt" in resp.json()["detail"]
+    assert GatePass.objects.count() == 0
 
 
 @pytest.mark.at("AT-01")
@@ -40,6 +64,8 @@ def test_at_01_inbound_uses_purchase_receipt(api, fake_erp):
     seed(fake_erp, "inbound_receipt", "PR-DRAFT", _state="draft")
     resp = create(store, direction="inbound", ref="PR-DRAFT")
     assert resp.status_code == 400
-    assert resp.json()["detail"] == "inbound_receipt PR-DRAFT not found or not submitted"
+    assert (
+        resp.json()["detail"] == "inbound_receipt PR-DRAFT not found or not submitted"
+    )
     seed(fake_erp, "inbound_receipt", "PR-OK")
     assert create(store, direction="inbound", ref="PR-OK").status_code == 201

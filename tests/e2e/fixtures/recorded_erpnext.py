@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from asb.connector import NotFound
+
 VERSION = "15.x (recorded sample)"
 
 DELIVERY_NOTE_FIELDS = [
@@ -46,6 +48,10 @@ ROWS: dict[str, list[dict[str, Any]]] = {
 }  # fmt: skip
 
 
+# docstatus -> _state, as in connectors/erpnext mapping.yaml
+_STATES = {0: "draft", 1: "submitted", 2: "cancelled"}
+
+
 class FakeConnector:
     """Read-only stand-in returning the recorded sample."""
 
@@ -53,13 +59,13 @@ class FakeConnector:
         return {"version": VERSION, "kinds": KINDS}
 
     def get(self, kind: str, id: str) -> dict[str, Any]:
-        for row in ROWS[kind]:
+        for row in ROWS.get(kind, []):
             if row["name"] == id:
-                return dict(row)
-        raise KeyError(id)
+                return {**row, "_state": _STATES[row["docstatus"]]}
+        raise NotFound(f"{kind} {id} not found")
 
     def list(self, kind, filters=None, fields=None, limit=50):
-        return [dict(r) for r in ROWS[kind][:limit]]
+        return [dict(r) for r in ROWS.get(kind, [])[:limit]]
 
     def create_draft(self, kind: str, data: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError("recorded sample is read-only")

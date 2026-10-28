@@ -207,6 +207,8 @@ def approve(sol_dir: Path, kind: str, by: str) -> Approval:
     )
     st = load_status(sol_dir)
     st.approvals.append(approval)
+    if kind in ("requirements", "design"):
+        st.stages[kind] = "done"  # approving a stage's output completes the stage
     save_status(sol_dir, st)
     log_event(sol_dir, "approve", f"{kind} by {by} hash={digest}")
     return approval

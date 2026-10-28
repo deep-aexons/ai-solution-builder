@@ -1,6 +1,6 @@
-from asb.connector import AuthFailed, Unavailable
 from entities.models import GatePass
 
+from asb.connector import AuthFailed, Unavailable
 from tests._gp import create, seed
 
 

@@ -5,5 +5,11 @@ from rules._ref import load_reference
 
 
 def check(obj, erp) -> None:
-    """Refuse a pass whose ERP reference is missing, draft or cancelled."""
+    """Refuse a pass whose ERP reference is missing, draft or cancelled.
+
+    Only while the pass is a draft (create, edit, submit): once it is with security
+    the ERP is not consulted, so a pass can always be rejected or closed.
+    """
+    if obj.state != "draft":
+        return
     load_reference(obj, erp)

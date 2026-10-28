@@ -8,7 +8,13 @@ from rules._ref import load_reference, to_decimal
 
 
 def check(obj, erp) -> None:
-    """Per item, pass quantity must not exceed the quantity on the ERP document."""
+    """Per item, pass quantity must not exceed the quantity on the ERP document.
+
+    Only while the pass is a draft (create, edit, submit): once it is with security
+    the ERP is not consulted, so a pass can always be rejected or closed.
+    """
+    if obj.state != "draft":
+        return
     kind, doc_id, doc = load_reference(obj, erp)
     allowed = defaultdict(lambda: to_decimal(0))
     for row in doc.get("items") or []:

@@ -44,4 +44,21 @@ markers = [
 
 [tool.ruff]
 src = ["core/tool"]
-extend-exclude = ["tests/sidecar/golden", "solutions"]
+extend-exclude = [
+    "tests/sidecar/golden",
+    "solutions/*/app/frontend",
+    "solutions/*/app/backend/config",
+    "solutions/*/app/backend/entities",
+    "solutions/*/app/backend/api",
+    "solutions/*/app/backend/workflow",
+    "solutions/*/app/backend/erp",
+    "solutions/*/app/backend/vendor",
+    "solutions/*/app/backend/staticfiles",
+    "solutions/*/app/backend/tests/conftest.py",
+    "solutions/*/app/backend/tests/test_permission_matrix.py",
+    "solutions/*/app/backend/tests/test_workflow_matrix.py",
+    "solutions/*/app/backend/tests/test_reports_smoke.py",
+    "solutions/*/app/backend/rules/__init__.py",
+    "solutions/*/app/backend/reports/__init__.py",
+    "solutions/*/app/backend/manage.py",
+]

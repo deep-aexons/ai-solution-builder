@@ -263,6 +263,7 @@ def test_reject_requires_reason(users):
     assert "reason" in resp.json()["detail"]
     assert resp.json()["fields"] == ["reason"]
     assert act(guard, pk, "reject", reason="").status_code == 400
+    assert act(guard, pk, "reject", reason="   ").status_code == 400  # blank is missing
     assert GatePass.objects.get(pk=pk).state == "pending_security"
     assert TransitionLog.objects.filter(action="reject").count() == 0
     resp = act(guard, pk, "reject", reason="wrong truck")

@@ -57,7 +57,9 @@ def entity_of(obj):
 
 
 def _is_empty(value):
-    return value is None or value == "" or value == [] or value == {}
+    if isinstance(value, str):
+        return value.strip() == ""
+    return value is None or value == [] or value == {}
 
 
 def _current(obj, entity, name):

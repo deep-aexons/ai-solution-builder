@@ -6,7 +6,7 @@ from entities.models import GatePass
 # AT-05: The gate register can be filtered by direction and date range.
 # covers: gate_register
 
-UTC = datetime.timezone.utc
+UTC = datetime.UTC
 
 
 def _pass(number_hint, direction, day, hour=10, state="approved"):
@@ -25,7 +25,9 @@ def seeded(db):
     _pass(2, "inbound", 19, state="rejected")
     _pass(3, "outbound", 20, hour=8)
     _pass(4, "outbound", 20, hour=15, state="closed")
-    GatePass.objects.create(direction="inbound", vehicle_no="V 5", driver="d")  # no time
+    GatePass.objects.create(
+        direction="inbound", vehicle_no="V 5", driver="d"
+    )  # no time
 
 
 def run(client, **params):
@@ -55,7 +57,9 @@ def test_at_05(api, seeded):
 
     both = run(guard, direction="outbound", date_from="2026-10-20")["rows"]
     assert [r["vehicle_no"] for r in both] == ["V 4", "V 3"]
-    assert [r["vehicle_no"] for r in run(guard, date_to="2026-10-18")["rows"]] == ["V 1"]
+    assert [r["vehicle_no"] for r in run(guard, date_to="2026-10-18")["rows"]] == [
+        "V 1"
+    ]
 
 
 @pytest.mark.at("AT-05")

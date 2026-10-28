@@ -226,3 +226,16 @@ def test_unreadable_and_undecodable_status(sol):
     (sol / "status.json").mkdir()  # a directory: read raises OSError, not missing
     with pytest.raises(GateError, match="status.json unreadable"):
         load_status(sol)
+
+
+def test_approving_requirements_or_design_marks_the_stage_done(sol):
+    assert load_status(sol).stages["requirements"] == "todo"
+    approve(sol, "requirements", "Deep")
+    assert load_status(sol).stages["requirements"] == "done"
+    put_model(sol)
+    approve(sol, "design", "Deep")
+    st = load_status(sol)
+    assert st.stages["design"] == "done"
+    assert st.stages["build"] == "todo" and st.stages["release"] == "todo"
+    approve(sol, "client", "Deep")
+    assert load_status(sol).stages["release"] == "todo"
