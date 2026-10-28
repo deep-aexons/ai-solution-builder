@@ -1,7 +1,21 @@
+from django.conf import settings
 from django.contrib import admin
-from django.urls import include, path
+from django.http import HttpResponse, JsonResponse
+from django.urls import include, path, re_path
+from django.views.decorators.http import require_safe
+
+
+@require_safe
+def spa(request, rest=""):
+    """Serve the built React app for every non-API route (client-side routing)."""
+    index = settings.FRONTEND_DIST / "index.html"
+    if not index.is_file():
+        return JsonResponse({"detail": "Frontend not built."}, status=404)
+    return HttpResponse(index.read_bytes(), content_type="text/html; charset=utf-8")
+
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", include("api.urls")),
+    re_path(r"^(?!api(/|$)|admin(/|$)|static/|media/)(?P<rest>.*)$", spa),
 ]

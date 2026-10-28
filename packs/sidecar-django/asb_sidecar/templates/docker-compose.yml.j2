@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: asb
+      POSTGRES_PASSWORD: asb
+      POSTGRES_DB: asb
+    volumes:
+      - asb_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asb -d asb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://asb:asb@db:5432/asb
+    ports:
+      - "8000:8000"
+    volumes:
+      - asb_media:/app/backend/media
+    depends_on:
+      db:
+        condition: service_healthy
+    command: sh -c "python manage.py migrate && python manage.py asb_sync_roles && gunicorn config.wsgi -b 0.0.0.0:8000"
+
+volumes:
+  asb_pgdata:
+  asb_media:

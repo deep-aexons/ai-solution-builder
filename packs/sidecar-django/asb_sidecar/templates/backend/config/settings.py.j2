@@ -38,6 +38,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -99,6 +100,12 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# The built React app (frontend/dist) is served as static files and by config.urls.
+FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
+STATICFILES_DIRS = [FRONTEND_DIST] if FRONTEND_DIST.is_dir() else []
+WHITENOISE_USE_FINDERS = DEBUG
+if DEBUG:
+    STATIC_ROOT.mkdir(exist_ok=True)  # WhiteNoise warns when the directory is missing
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 

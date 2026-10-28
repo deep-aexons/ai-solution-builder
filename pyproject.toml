@@ -26,6 +26,7 @@ dev = [
     "django>=5.2,<5.3",
     "djangorestframework>=3.15",
     "pytest-django>=4.8",
+    "whitenoise>=6.6",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -36,6 +37,7 @@ testpaths = ["tests"]
 pythonpath = ["core/tool", "packs/sidecar-django", "connectors/erpnext"]
 markers = [
     "compose: requires Docker Compose (Postgres/ERPNext); run with ASB_COMPOSE=1",
+    "slow: builds the generated frontend with npm (needs network)",
     "live_erp: requires a live ERPNext instance; run with ASB_ERP_URL set",
 ]
 
