@@ -1,4 +1,6 @@
 # Report {{ name }} on {{ entity }}; filters: {{ filters }}; columns: {{ columns }}
+# AI-owned: never overwritten. Helper modules in reports/ must start with an underscore
+# (e.g. reports/_helpers.py); any other <name>.py without a matching report is an orphan.
 
 
 def run(filters: dict) -> list[dict]:

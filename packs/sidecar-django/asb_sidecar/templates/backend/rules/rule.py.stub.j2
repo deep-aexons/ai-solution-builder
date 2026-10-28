@@ -1,9 +1,15 @@
 {% for line in text_lines %}
 # {{ line }}
 {% endfor %}
+# AI-owned: never overwritten. Helper modules in rules/ must start with an underscore
+# (e.g. rules/_helpers.py); any other r<N>.py without a matching rule is an orphan.
 from rules import RuleViolation  # noqa: F401
 
 
 def check(obj, erp) -> None:
-    """Raise RuleViolation(message) to refuse; `erp` is the ERP connector (read only)."""
+    """Raise RuleViolation(message) to refuse the change.
+
+    `erp` is the ERP connector: get/list/inspect, and create_draft only for kinds the
+    approved model lists as write:<kind> (anything else raises WriteNotApproved).
+    """
     raise NotImplementedError("{{ rule_id }} not implemented")

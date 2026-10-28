@@ -155,3 +155,29 @@ def test_export_csv(api):
         store.get("/api/gate_pass/export/").status_code == 403
     )  # no export permission
     assert api("security").get("/api/gate_pass/export/").status_code == 403
+
+
+def test_csv_formula_guard_only_touches_text(api):
+    store = api("store_user")
+    for driver in ("-5", "@sum", "plain"):
+        assert post(store, driver=driver).status_code == 201
+    text = api("manager").get("/api/gate_pass/export/").content.decode()
+    assert ",-5," in text and ",'-5," not in text  # numeric text is left alone
+    assert "'@sum" in text and ",plain," in text
+
+
+def test_cell_guard_covers_tab_and_cr():
+    from api.views import _cell
+
+    assert _cell("\tx") == "'\tx" and _cell("\rx") == "'\rx"
+    assert _cell("=1+1") == "'=1+1" and _cell("-5") == "-5" and _cell(-5) == "-5"
+    assert _cell(None) == ""
+
+
+def test_fake_erp_only_creates_drafts_for_approved_kinds(fake_erp):
+    from asb.connector import WriteNotApproved
+
+    with pytest.raises(WriteNotApproved):
+        fake_erp.create_draft("outbound_shipment", {"x": 1})
+    fake_erp.allowed_writes.add("write:outbound_shipment")
+    assert fake_erp.create_draft("outbound_shipment", {"x": 1})["_state"] == "draft"

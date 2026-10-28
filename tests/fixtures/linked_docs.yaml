@@ -1,0 +1,47 @@
+solution: linked_docs
+version: 1
+description: Orders with a required link, attachment, unique fields and a patterned unique code.
+entities:
+  - name: customer
+    label: Customer
+    fields:
+      - {name: code, type: text, required: true, unique: true, pattern: "^[A-Z]+$"}
+      - {name: name, type: text, required: true, unique: true}
+      - {name: scan, type: attachment, required: true}
+  - name: purchase_order
+    label: Purchase Order
+    numbering: "PO-{#####}"
+    fields:
+      - {name: customer, type: link, to: [customer], required: true}
+      - {name: title, type: text, required: true, unique: true}
+      - {name: qty, type: number, required: true, unique: true, min: 1, max: 1000}
+      - {name: total, type: money, unique: true}
+      - {name: due, type: date, unique: true}
+      - {name: reason, type: text}
+      - {name: lines, type: table, of: po_line, required: true}
+  - name: po_line
+    label: PO Line
+    child_of: purchase_order
+    fields:
+      - {name: supplier, type: link, to: [customer], required: true}
+      - {name: item, type: text, required: true}
+workflow:
+  entity: purchase_order
+  states: [draft, submitted, approved, rejected]
+  initial: draft
+  final_states: [approved, rejected]
+  transitions:
+    - {from: draft, to: submitted, action: submit, roles: [clerk]}
+    - {from: submitted, to: approved, action: approve, roles: [approver]}
+    - {from: submitted, to: rejected, action: reject, roles: [approver], require: [reason]}
+roles:
+  clerk:
+    customer: [create, read, update, delete, export]
+    purchase_order: [create, read, update_own_draft, delete, export]
+  approver:
+    customer: [read]
+    purchase_order: [read, approve]
+  viewer:
+    customer: [read]
+    purchase_order: [read, update, export]
+acceptance_tests: []

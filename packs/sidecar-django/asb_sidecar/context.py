@@ -152,15 +152,40 @@ def layer_context(solution: Solution, connector_entry: str | None) -> dict[str, 
     return {
         **base,
         "connector": connector,
+        "allowed_writes_lit": lit(writes),
         "rules_lit": lit([(r.id, r.id.lower()) for r in solution.rules]),
         "report_specs_lit": lit(report_specs),
         "samples_lit": lit(samples_context(solution)),
         "top_entities_lit": lit([e.name for e in top]),
         "transitions_lit": lit(transitions),
         "states_lit": lit({w.entity: list(w.states) for w in workflows}),
+        "has_transitions": bool(transitions),
+        "has_other_state": any(
+            any(
+                not any(x.action == t.action and x.from_ == st for x in w.transitions)
+                for st in w.states
+            )
+            for w in workflows
+            for t in w.transitions
+        ),
+        "other_state_lit": lit(
+            [
+                any(
+                    not any(
+                        x.action == t.action and x.from_ == st for x in w.transitions
+                    )
+                    for st in w.states
+                )
+                for w in workflows
+                for t in w.transitions
+            ]
+        ),
         "initial_lit": lit({w.entity: w.initial for w in workflows}),
         "field_attrs_lit": lit({e.name: _entity_def(e)["field_attrs"] for e in top}),
         "permissions_lit": lit(list(PERMISSIONS)),
+        "report_filters_lit": lit(
+            {n: (r["filters"][:1]) for n, r in report_specs.items()}
+        ),
         "report_cases": lit([(r, rep) for r in role_names for rep in report_specs])
         if report_specs
         else "",

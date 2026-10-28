@@ -19,6 +19,22 @@ from .permissions import EntityPermission
 from .serializers import build_serializer
 
 
+def _cell(value):
+    """CSV cell; text that a spreadsheet could run as a formula is prefixed with a quote."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return str(value)
+    if value[:1] in ("\t", "\r"):
+        return "'" + value
+    if value[:1] in ("=", "+", "-", "@"):
+        try:
+            float(value)
+        except ValueError:
+            return "'" + value
+    return value
+
+
 class EntityViewSet(viewsets.ModelViewSet):
     entity = None
     permission_classes = [EntityPermission]
@@ -71,9 +87,7 @@ class EntityViewSet(viewsets.ModelViewSet):
                     value = getattr(obj, col + "_id")
                 elif hasattr(value, "name") and hasattr(value, "storage"):
                     value = value.name
-                text = "" if value is None else str(value)
-                # Neutralise spreadsheet formulas.
-                row.append("'" + text if text[:1] in ("=", "+", "-", "@") else text)
+                row.append(_cell(value))
             writer.writerow(row)
         return response
 

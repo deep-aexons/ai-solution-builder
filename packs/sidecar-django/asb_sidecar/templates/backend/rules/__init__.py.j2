@@ -17,7 +17,11 @@ RULES = {{ rules_lit }}
 
 
 class _LazyERP:
-    """Connects to the ERP only when a rule actually uses it."""
+    """Connects to the ERP only when a rule actually uses it.
+
+    Any attribute access (even hasattr or getattr probes) builds the connector, so a rule
+    that never touches `erp` never needs credentials; one that probes it does.
+    """
 
     def __getattr__(self, name):
         import erp

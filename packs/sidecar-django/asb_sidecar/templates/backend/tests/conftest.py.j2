@@ -1,7 +1,9 @@
 """Fixtures for the generated suites: fake ERP, rules switched off, role-based API clients."""
 
-import copy
+import datetime
+import re
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -18,12 +20,20 @@ from workflow.definitions import ENTITIES, WORKFLOWS  # noqa: E402
 SAMPLES = {{ samples_lit }}
 
 
-class FakeConnector:
-    """In-memory ERP implementing asb.connector.Connector; seed it per test."""
+ALLOWED_WRITES = {{ allowed_writes_lit }}
 
-    def __init__(self):
+
+class FakeConnector:
+    """In-memory ERP implementing asb.connector.Connector; seed it per test.
+
+    Like the real connector it only creates drafts for kinds the model approves
+    for writing ("write:<kind>"); anything else raises WriteNotApproved.
+    """
+
+    def __init__(self, allowed_writes=None):
         self.records = {}
         self.created = []
+        self.allowed_writes = set(ALLOWED_WRITES if allowed_writes is None else allowed_writes)
 
     def seed(self, kind, id, record):
         self.records.setdefault(kind, {})[id] = {"name": id, **record}
@@ -47,6 +57,10 @@ class FakeConnector:
         return rows[:limit]
 
     def create_draft(self, kind, data):
+        from asb.connector import WriteNotApproved
+
+        if f"write:{kind}" not in self.allowed_writes:
+            raise WriteNotApproved(f"write:{kind} is not approved in the solution model")
         draft_id = f"DRAFT-{len(self.created) + 1}"
         self.seed(kind, draft_id, {**data, "_state": "draft"})
         self.created.append((kind, draft_id))
@@ -54,7 +68,8 @@ class FakeConnector:
 
 
 @pytest.fixture(autouse=True)
-def _isolated(settings):
+def _isolated(settings, tmp_path):
+    settings.MEDIA_ROOT = str(tmp_path / "media")
     settings.PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
     yield
     erp.reset_connector()
@@ -115,47 +130,138 @@ def api(make_user):
     return client_for
 
 
+def _letters(n, alphabet):
+    out = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = alphabet[r] + out
+    return out
+
+
+def _skip(why):
+    pytest.skip(f"sample-incomplete: {why}")
+
+
 class Samples:
+    """Valid request bodies and ORM records for every entity, unique per record."""
+
     def __init__(self):
-        self.n = 0
+        self.counts = {}
 
     def complete(self, entity):
-        return SAMPLES[entity]["complete"]
-
-    def payload(self, entity):
         spec = SAMPLES[entity]
-        if not spec["complete"]:
-            pytest.skip(f"no valid sample for {entity}: {spec['reason']}")
-        self.n += 1
-        data = copy.deepcopy(spec["payload"])
-        for attr in spec["unique"]:
-            data[attr] = f"{data[attr]}{self.n}" if isinstance(data[attr], str) else data[attr] + self.n
+        return not (spec["api_reason"] or spec["orm_reason"])
+
+    def _need(self, entity, orm):
+        spec = SAMPLES[entity]
+        reason = spec["orm_reason"] or ("" if orm else spec["api_reason"])
+        if reason:
+            _skip(f"{entity}: {reason}")
+
+    def _unique(self, entity, attr, u):
+        k = self.counts[(entity, attr)] = self.counts.get((entity, attr), 0) + 1
+        kind, base = u["type"], u["base"]
+        if kind == "text":
+            suffixes = (str(k), _letters(k, "ABCDEFGHIJKLMNOPQRSTUVWXYZ"), _letters(k, "abcdefghijklmnopqrstuvwxyz"))
+            for cand in [base + s for s in suffixes] + [s + base for s in suffixes]:
+                if not u["pattern"] or re.search(u["pattern"], cand):
+                    return cand
+            _skip(f"no unique value of '{attr}' matches its pattern")
+        if kind in ("number", "decimal", "money"):
+            lo, hi = u["lo"], u["hi"]
+            value = Decimal(str(base)) + k
+            if hi is not None:
+                lo = Decimal(str(lo if lo is not None else base))
+                value = lo + (Decimal(str(base)) - lo + k) % (Decimal(str(hi)) - lo + 1)
+            if kind == "number":
+                return int(value)
+            return str(value.quantize(Decimal(1).scaleb(-u["places"])))
+        if kind == "date":
+            return (datetime.date.fromisoformat(base) + datetime.timedelta(days=k)).isoformat()
+        if kind == "datetime":
+            moment = datetime.datetime.fromisoformat(base.replace("Z", "+00:00"))
+            return (moment + datetime.timedelta(seconds=k)).isoformat().replace("+00:00", "Z")
+        if kind == "choice":
+            if k > len(u["options"]):
+                _skip(f"unique choice '{attr}' has only {len(u['options'])} options")
+            return u["options"][k - 1]
+        _skip(f"cannot make unique {kind} field '{attr}'")
+
+    def _data(self, entity, orm):
+        spec = SAMPLES[entity]
+        data = dict(spec["payload"])
+        for attr, u in spec["unique"].items():
+            data[attr] = self._unique(entity, attr, u)
+        if orm:
+            data.update(spec["orm_fill"])
+        for attr, target in spec["links"].items():
+            data[attr] = self.make(target)[0].pk
+        for name, child in spec["tables"].items():
+            data[name] = [self._data(child, orm)]
         return data
 
-    def make(self, entity, state=None, owner=None):
-        """Create a record through the ORM; returns (object, request payload)."""
-        from django.apps import apps
+    def payload(self, entity):
+        """A request body the API accepts for creating `entity`."""
+        self._need(entity, False)
+        return self._data(entity, False)
 
-        payload = self.payload(entity)
-        info = ENTITIES[entity]
-        tables = {t["name"]: t["of"] for t in info["tables"]}
-        values = {k: v for k, v in payload.items() if k not in tables}
+    def post(self, client, entity, data):
+        files = SAMPLES[entity]["files"]
+        if not files:
+            return client.post(f"/api/{entity}/", data, format="json")
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        body = {**data, **{a: SimpleUploadedFile("sample.txt", b"sample") for a in files}}
+        return client.post(f"/api/{entity}/", body, format="multipart")
+
+    def make(self, entity, state=None, owner=None, parent=None, data=None):
+        """Create a record (and its link targets and child rows) through the ORM."""
+        from django.apps import apps
+        from django.core.files.base import ContentFile
+
+        self._need(entity, True)
+        spec, info = SAMPLES[entity], ENTITIES[entity]
+        data = data if data is not None else self._data(entity, True)
+        values = {
+            (f"{k}_id" if k in spec["links"] else k): v
+            for k, v in data.items()
+            if k not in spec["tables"]
+        }
+        for attr in spec["files"]:
+            values[attr] = ContentFile(b"sample", name="sample.txt")
+        if info["child_of"]:
+            values["parent"] = parent or self.make(info["child_of"])[0]
+        else:
+            values["created_by"] = owner
         if state is not None and entity in WORKFLOWS:
             values["state"] = state
-        obj = apps.get_model("entities", info["model"]).objects.create(created_by=owner, **values)
-        for name, child in tables.items():
-            model = apps.get_model("entities", ENTITIES[child]["model"])
-            for row in payload.get(name, []):
-                model.objects.create(
-                    parent=obj, **{k: v for k, v in row.items() if not isinstance(v, list)}
-                )
-        return obj, payload
+        obj = apps.get_model("entities", info["model"]).objects.create(**values)
+        for name, child in spec["tables"].items():
+            for row in data[name]:
+                self.make(child, parent=obj, data=row)
+        return obj, data
 
-    def patch_body(self, entity, payload):
+    def patch_body(self, entity, payload, want):
         attr = SAMPLES[entity]["patch"]
         if attr is None:
-            pytest.skip(f"{entity} has no scalar field to change")
+            if want:
+                _skip(f"{entity} has no scalar field to change")
+            return {}
         return {attr: payload[attr]}
+
+    def transition_body(self, entity, t, payload, want):
+        """Body for a transition; links, files and rows already exist on the ORM record."""
+        spec = SAMPLES[entity]
+        body = {"action": t["action"]}
+        for name in t["require"]:
+            for attr in ENTITIES[entity]["field_attrs"][name]:
+                if attr in spec["links"] or attr in spec["files"] or attr in spec["tables"]:
+                    continue
+                if attr in payload:
+                    body[attr] = payload[attr]
+                elif want:
+                    _skip(f"no sample for required field {attr}")
+        return body
 
 
 @pytest.fixture

@@ -1,4 +1,5 @@
 """Every workflow transition x every role against the API (rules switched off)."""
+{% if has_transitions %}
 
 import pytest
 
@@ -6,7 +7,7 @@ GRANTS = {{ roles_lit }}
 ROLES = {{ role_names_lit }}
 TRANSITIONS = {{ transitions_lit }}
 STATES = {{ states_lit }}
-FIELD_ATTRS = {{ field_attrs_lit }}
+HAS_OTHER_STATE = {{ other_state_lit }}
 INITIAL = {{ initial_lit }}
 CASES = [(i, r) for i in range(len(TRANSITIONS)) for r in ROLES]
 
@@ -24,17 +25,6 @@ def expected(t, role):
     return 200
 
 
-def body_for(t, payload, want):
-    body = {"action": t["action"]}
-    for name in t["require"]:
-        for attr in FIELD_ATTRS[t["entity"]][name]:
-            if attr in payload:
-                body[attr] = payload[attr]
-            elif want:
-                pytest.skip(f"no sample for required field {attr}")
-    return body
-
-
 @pytest.mark.parametrize(
     ("index", "role"), CASES, ids=[f"{label(TRANSITIONS[i])}-{r}" for i, r in CASES]
 )
@@ -46,7 +36,7 @@ def test_transition_by_role(index, role, api, samples, rules_noop):
     obj, payload = samples.make(t["entity"], state=t["from"])
     client = api(role)
     resp = client.post(
-        f"/api/{t['entity']}/{obj.pk}/transition/", body_for(t, payload, want == 200), format="json"
+        f"/api/{t['entity']}/{obj.pk}/transition/", samples.transition_body(t["entity"], t, payload, want == 200), format="json"
     )
     assert resp.status_code == want, resp.content
     obj.refresh_from_db()
@@ -62,7 +52,11 @@ def test_transition_by_role(index, role, api, samples, rules_noop):
         assert not logs.exists()
 
 
-@pytest.mark.parametrize("index", range(len(TRANSITIONS)), ids=[label(t) for t in TRANSITIONS])
+{% if has_other_state %}
+OTHER = [i for i, ok in enumerate(HAS_OTHER_STATE) if ok]
+
+
+@pytest.mark.parametrize("index", OTHER, ids=[label(TRANSITIONS[i]) for i in OTHER])
 def test_transition_refused_in_other_states(index, api, samples, rules_noop):
     t = TRANSITIONS[index]
     others = [
@@ -70,15 +64,15 @@ def test_transition_refused_in_other_states(index, api, samples, rules_noop):
         for s in STATES[t["entity"]]
         if not any(x["entity"] == t["entity"] and x["action"] == t["action"] and x["from"] == s for x in TRANSITIONS)
     ]
-    if not others:
-        pytest.skip(f"'{t['action']}' is available in every state")
     role = next((r for r in ROLES if expected(t, r) == 200), None)
     if role is None:
-        pytest.skip("no role can perform this transition")
+        pytest.skip("approve-not-exercisable: no role can perform this transition")
     obj, payload = samples.make(t["entity"], state=others[0])
     resp = api(role).post(
-        f"/api/{t['entity']}/{obj.pk}/transition/", body_for(t, payload, False), format="json"
+        f"/api/{t['entity']}/{obj.pk}/transition/", samples.transition_body(t["entity"], t, payload, False), format="json"
     )
     assert resp.status_code == 400, resp.content
     obj.refresh_from_db()
     assert obj.state == others[0]
+{% endif %}
+{% endif %}

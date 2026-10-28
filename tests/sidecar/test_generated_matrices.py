@@ -43,9 +43,23 @@ def _pytest(backend: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _passed(out: str) -> int:
-    match = re.search(r"(\d+) passed", out)
-    return int(match.group(1)) if match else 0
+def _counts(out: str) -> dict[str, int]:
+    """Counts from pytest's final summary line, e.g. '2 failed, 38 passed, 1 error in 3s'."""
+    last = [
+        ln for ln in out.splitlines() if re.search(r"\d+ (passed|failed|error)", ln)
+    ][-1]
+    found = {
+        w: int(n)
+        for n, w in re.findall(
+            r"(\d+) (passed|failed|errors?|skipped|deselected)", last
+        )
+    }
+    return {
+        "passed": found.get("passed", 0),
+        "failed": found.get("failed", 0),
+        "errors": found.get("error", 0) + found.get("errors", 0),
+        "skipped": found.get("skipped", 0),
+    }
 
 
 @pytest.mark.parametrize("fixture", ["gate_pass.yaml", "mini_docs.yaml"])
@@ -55,7 +69,9 @@ def test_matrices_pass_with_rules_stubbed(tmp_path, fixture):
     out = proc.stdout + proc.stderr
     assert proc.returncode == 0, out
     assert "warnings summary" not in out, out
-    assert "failed" not in out and "error" not in out.lower(), out
+    counts = _counts(out)
+    assert counts["failed"] == 0 and counts["errors"] == 0 and counts["passed"] > 0, out
+    assert "sample-incomplete" not in out, out
 
 
 def test_gate_pass_matrix_size_and_skips(tmp_path):
@@ -71,7 +87,10 @@ def test_gate_pass_matrix_size_and_skips(tmp_path):
     )
     assert text.count("test_permission_matrix.py::test_report_access[") == 3
     # approve cases without an exercisable transition are skipped with a reason
-    assert re.search(r"SKIPPED .*has no transition out of a non-initial state", text)
+    assert re.search(r"SKIPPED .*approve-not-exercisable: .*non-initial state", text)
+    matrix = (tmp_path / "app/backend/tests/test_permission_matrix.py").read_text()
+    assert "direction=outbound" not in matrix
+    assert "'gate_register': ['date_range']" in matrix  # first declared filter
 
 
 def test_mini_docs_exercises_every_permission(tmp_path):
@@ -99,13 +118,13 @@ def test_at_stubs_fail_until_implemented(tmp_path):
     proc = _pytest(backend, "tests", "-m", "at")
     out = proc.stdout + proc.stderr
     assert proc.returncode != 0
-    assert "6 failed" in out
+    assert _counts(out)["failed"] == 6
     for n in range(1, 7):
         assert f"AT-0{n} not implemented" in out
     assert "warnings summary" not in out, out
     full = _pytest(backend, "tests")
-    assert full.returncode != 0 and "6 failed" in full.stdout
-    assert _passed(full.stdout) > 30
+    assert full.returncode != 0 and _counts(full.stdout)["failed"] == 6
+    assert _counts(full.stdout)["passed"] > 30
 
 
 def test_rules_reports_and_export_in_generated_gate_pass_app(tmp_path):
@@ -144,3 +163,27 @@ def test_rules_reports_and_export_in_generated_gate_pass_app(tmp_path):
     # the generated matrices still pass with the real rules, thanks to rules_noop
     again = _pytest(backend, "tests", "-m", "not at")
     assert again.returncode == 0, again.stdout
+
+
+def test_linked_entities_are_fully_exercised(tmp_path):
+    """Required links, attachments, unique and patterned fields never cause skips."""
+    generate(load_solution(FIXTURES / "linked_docs.yaml"), tmp_path)
+    proc = _pytest(tmp_path / "app/backend", "tests", "-m", "not at", "-v", "-rs")
+    text = proc.stdout
+    assert proc.returncode == 0, text
+    assert "sample-incomplete" not in text, text
+    skips = [ln for ln in text.splitlines() if ln.startswith("SKIPPED")]
+    assert skips, "approve cases without a transition are expected to skip"
+    assert all("approve-not-exercisable:" in ln for ln in skips), skips
+    for entity in ("customer", "purchase_order"):
+        for perm in (
+            "create",
+            "read",
+            "update",
+            "update_own_draft",
+            "delete",
+            "export",
+        ):
+            assert re.search(rf"clerk-{entity}-{perm}\] PASSED", text), (entity, perm)
+    assert "approver-purchase_order-approve] PASSED" in text
+    assert "viewer-purchase_order-update] PASSED" in text
