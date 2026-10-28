@@ -1,19 +1,38 @@
 # Core guardrail policy. Packs may only tighten it (see load_policy in asb.checks).
 # Examples of what the checks target: eval/exec, raw SQL formatting, secrets.
+#
+# deny_commands: regexes (case-insensitive, dot matches newline) searched in Bash
+# commands while a solution is active. This is a guardrail, not a sandbox.
 deny_commands:
-  - '\brm\s+-[a-zA-Z]*r[a-zA-Z]*f'
-  - '\brm\s+-[a-zA-Z]*f[a-zA-Z]*r'
-  - '\bgit\s+push\b'
-  - '\bdocker\s+system\s+prune\b'
-  - 'curl\b.*-X\s*DELETE'
+  # rm with both a recursive and a force flag, in any form or order
+  - '\brm\b(?=[^;|&\n]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))(?=[^;|&\n]*\s(?:-[a-z]*f[a-z]*|--force)(?:\s|$))'
+  - '\bgit\b.*\bpush\b'
+  # command indirection: $GIT push, ${G} push
+  - '\$\{?\w+\}?\s+push\b'
+  - '\bdocker\b.*\bsystem\s+prune\b'
+  - 'curl\b.*(-X|--request)[\s=]*[''"]?DELETE'
+  - '\bfind\b.*\s-delete\b'
   - '\bDROP\s+(TABLE|DATABASE)\b'
+  # approvals and the active solution are changed by humans, not by the AI
+  - '\basb\s+(approve|use)\b'
+  - '-m\s+asb\b.*\b(approve|use)\b'
+  # anything touching the .asb folder (active solution, manifest anchors)
+  - '(?<![\w.])\.asb(?![\w.-])'
+  # protected files together with a write-ish shell operator
+  - '\A(?=.*(?:status\.json|audit\.log|exceptions\.yaml|\.asb-manifest\.json))(?=.*(?:(?<!\d)>(?!&)|\btee\b|\bsed\b[^\n]*\s-[a-z]*i|\bmv\b|\bcp\b|\brm\b|\btruncate\b))'
 checks:
   - EVAL
   - RAW_SQL
   - SECRET
   - NO_PERMISSION
   - HEADER_TAMPERED
-skip_paths:
+# Directories never walked (dependencies, VCS data).
+ignore_paths:
   - "**/node_modules/**"
-  - "**/dist/**"
   - "**/.git/**"
+# Non-Python files under these paths, not listed in the generator manifest, are build
+# output and are not scanned.
+build_output:
+  - "**/dist/**"
+# Exemptions that apply only to files listed in the generator manifest (packs add here).
+skip_paths: []

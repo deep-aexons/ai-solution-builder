@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from asb import __version__
-from asb.checks import load_policy, run_checks
+from asb.checks import load_policy, read_anchor, run_checks
 from asb.model import ModelError, load_solution
 from asb.plugins import load_pack
 from asb.status import (
@@ -206,7 +206,12 @@ def check_cmd(
     except (GateError, FileNotFoundError, ValueError) as exc:
         typer.echo(f"error: {exc}")
         raise typer.Exit(1) from exc
-    issues = run_checks(app_dir, policy)
+    anchor = read_anchor(base, name)
+    if anchor is None:
+        typer.echo(
+            "warning: no manifest anchor (.asb/manifests); regenerate to create it"
+        )
+    issues = run_checks(app_dir, policy, anchor)
     log_event(sol_dir, "check", f"issues={len(issues)}")
     if issues:
         for issue in issues:

@@ -15,6 +15,7 @@ from typing import Any
 
 import jinja2
 
+from asb.checks import write_anchor
 from asb.model import Entity, Field, Solution
 from asb.plugins import GenerateResult
 
@@ -410,6 +411,7 @@ def generate(
     solution: Solution, solution_dir: Path, root: Path | None = None
 ) -> GenerateResult:
     solution_dir = Path(solution_dir)
+    root_arg = Path(root) if root is not None else None
     if root is None:
         root = (
             solution_dir.parents[1] if len(solution_dir.parents) > 1 else solution_dir
@@ -512,4 +514,15 @@ def generate(
     digests = {rel: hashlib.sha256(data).hexdigest() for rel, data in files.items()}
     manifest = json.dumps(digests, indent=2, sort_keys=True) + "\n"
     (app / MANIFEST).write_text(manifest, encoding="utf-8")
+    # Trust anchor outside the app (<root>/.asb/manifests/<solution>.sha256), so an edited
+    # manifest is detectable. Only written for the solutions/<name> layout or an explicit root.
+    anchor_root = (
+        root_arg
+        if root_arg is not None
+        else (
+            solution_dir.parents[1] if solution_dir.parent.name == "solutions" else None
+        )
+    )
+    if anchor_root is not None:
+        write_anchor(anchor_root, solution_dir.name, app)
     return GenerateResult(written=sorted(files) + [MANIFEST], skipped_ai_owned=skipped)
