@@ -210,3 +210,9 @@ def test_cli_rejects_bad_names_and_corrupt_status(tmp_path):
     assert "Traceback" not in res.output
     res = r.invoke(app, ["approve", "ok", "bogus", "--by", "x", *root])
     assert res.exit_code == 1
+
+
+def test_missing_status_is_not_corrupt(sol):
+    (sol / "status.json").unlink()
+    with pytest.raises(GateError, match="status.json not found"):
+        load_status(sol)

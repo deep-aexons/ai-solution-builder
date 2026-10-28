@@ -11,7 +11,7 @@ import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ValidationError
 
@@ -22,7 +22,7 @@ MAX_VERIFY_ROUNDS = 3
 _NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
 
 ApprovalKind = Literal["requirements", "design", "client", "golive"]
-APPROVAL_KINDS: tuple[str, ...] = ApprovalKind.__args__  # type: ignore[attr-defined]
+APPROVAL_KINDS: tuple[str, ...] = get_args(ApprovalKind)
 
 
 class GateError(Exception):
@@ -59,6 +59,8 @@ def log_event(sol_dir: Path, event: str, detail: str) -> None:
 
 def load_status(sol_dir: Path) -> Status:
     path = Path(sol_dir) / "status.json"
+    if not path.is_file():
+        raise GateError(f"status.json not found: {path}")
     try:
         return Status.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValidationError) as exc:
