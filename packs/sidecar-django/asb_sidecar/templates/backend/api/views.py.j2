@@ -8,6 +8,7 @@ from django.db import transaction
 from django.http import HttpResponse
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -119,6 +120,8 @@ def viewset_for(entity):
 
 class ReportView(APIView):
     """GET /api/reports/<name>/ for roles that list the report."""
+
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, name):
         if name not in REPORTS:

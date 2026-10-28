@@ -112,7 +112,28 @@ def new_solution(root: Path, name: str, pack: str, connector: str | None) -> Pat
         ),
     )
     log_event(sol_dir, "new", f"pack={pack} connector={connector}")
+    set_active(root, name)
     return sol_dir
+
+
+def set_active(root: Path, name: str) -> None:
+    """Make `name` the active solution (read by the PreToolUse hook)."""
+    if not valid_name(name):
+        raise ValueError(f"invalid solution name '{name}': use ^[a-z][a-z0-9-]*$")
+    folder = Path(root) / ".asb"
+    folder.mkdir(exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".active-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(name + "\n")
+        os.replace(tmp, folder / "active")
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def clear_active(root: Path) -> None:
+    (Path(root) / ".asb" / "active").unlink(missing_ok=True)
 
 
 def model_hash(path: Path) -> str:

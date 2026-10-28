@@ -1,0 +1,19 @@
+# Core guardrail policy. Packs may only tighten it (see load_policy in asb.checks).
+# Examples of what the checks target: eval/exec, raw SQL formatting, secrets.
+deny_commands:
+  - '\brm\s+-[a-zA-Z]*r[a-zA-Z]*f'
+  - '\brm\s+-[a-zA-Z]*f[a-zA-Z]*r'
+  - '\bgit\s+push\b'
+  - '\bdocker\s+system\s+prune\b'
+  - 'curl\b.*-X\s*DELETE'
+  - '\bDROP\s+(TABLE|DATABASE)\b'
+checks:
+  - EVAL
+  - RAW_SQL
+  - SECRET
+  - NO_PERMISSION
+  - HEADER_TAMPERED
+skip_paths:
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/.git/**"

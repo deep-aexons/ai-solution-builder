@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from asb import __version__
+from asb.checks import load_policy, run_checks
 from asb.model import ModelError, load_solution
 from asb.plugins import load_pack
 from asb.status import (
@@ -13,9 +14,12 @@ from asb.status import (
     STAGES,
     GateError,
     approve,
+    clear_active,
     load_status,
+    log_event,
     new_solution,
     require,
+    set_active,
     valid_name,
 )
 from asb.validate import validate
@@ -183,3 +187,51 @@ def gate_cmd(
         typer.echo(str(exc))
         raise typer.Exit(1) from exc
     typer.echo("OK")
+
+
+@app.command("check")
+def check_cmd(
+    name: Annotated[str, typer.Argument(help="Solution name.")],
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Run the static guardrail checks over the generated app (exit 1 on issues)."""
+    sol_dir = _sol_dir(root, name)
+    base = root if root is not None else Path.cwd()
+    app_dir = sol_dir / "app"
+    if not app_dir.is_dir():
+        typer.echo(f"error: no app/ folder in {sol_dir}; build first")
+        raise typer.Exit(1)
+    try:
+        policy = load_policy(base, load_status(sol_dir).pack)
+    except (GateError, FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
+    issues = run_checks(app_dir, policy)
+    log_event(sol_dir, "check", f"issues={len(issues)}")
+    if issues:
+        for issue in issues:
+            typer.echo(str(issue))
+        raise typer.Exit(1)
+    typer.echo("OK: no issues")
+
+
+@app.command("use")
+def use_cmd(
+    name: Annotated[str | None, typer.Argument(help="Solution to make active.")] = None,
+    clear: Annotated[
+        bool, typer.Option("--clear", help="Deactivate (no guardrails for the hook).")
+    ] = False,
+    root: RootOpt = None,  # type: ignore[assignment]
+) -> None:
+    """Set or clear the active solution the PreToolUse hook confines the AI to."""
+    base = root if root is not None else Path.cwd()
+    if clear:
+        clear_active(base)
+        typer.echo("cleared active solution")
+        return
+    if name is None:
+        typer.echo("error: give a solution name or --clear")
+        raise typer.Exit(1)
+    _sol_dir(root, name)
+    set_active(base, name)
+    typer.echo(f"active solution: {name}")

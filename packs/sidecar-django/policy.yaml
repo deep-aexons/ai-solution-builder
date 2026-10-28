@@ -1,0 +1,15 @@
+# Pack policy: merged onto core/policy/policy.yaml (can only add, never remove).
+no_permission:
+  base_classes:
+    - APIView
+    - GenericAPIView
+    - ViewSet
+    - GenericViewSet
+    - ModelViewSet
+    - ReadOnlyModelViewSet
+  attribute: permission_classes
+skip_paths:
+  - "backend/vendor/**"
+  - "backend/*/migrations/**"
+  - "frontend/node_modules/**"
+  - "frontend/dist/**"

@@ -15,7 +15,7 @@ DEBUG = os.environ.get("DEBUG") == "1"
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
     if DEBUG:
-        SECRET_KEY = "asb-dev-only-insecure-key"  # noqa: S105
+        SECRET_KEY = "asb-dev-only-insecure-key"  # noqa: S105  # asb: allow-secret dev-only
     else:
         raise ImproperlyConfigured("SECRET_KEY must be set unless DEBUG=1")
 
