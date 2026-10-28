@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 
 from django.apps import apps
+from django.db import transaction
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -21,7 +22,20 @@ class EntityViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         model = apps.get_model("entities", ENTITIES[self.entity]["model"])
-        return model.objects.all().order_by("-pk")
+        qs = model.objects.all().order_by("-pk")
+        if self.action in ("partial_update", "destroy"):
+            # Called inside transaction.atomic: lock the row so the permission check
+            # and the write see the committed state.
+            qs = qs.select_for_update()
+        return qs
+
+    def partial_update(self, request, *args, **kwargs):
+        with transaction.atomic():
+            return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        with transaction.atomic():
+            return super().destroy(request, *args, **kwargs)
 
     def get_serializer_class(self):
         return build_serializer(self.entity)

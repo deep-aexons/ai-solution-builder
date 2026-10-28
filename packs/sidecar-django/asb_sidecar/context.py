@@ -46,6 +46,9 @@ def _entity_def(e: Entity) -> dict[str, Any]:
         "read_only_attrs": [
             a for f in e.fields if f.read_only for a in _attrs(f.name, f.type)
         ],
+        "read_only_tables": [
+            f.name for f in e.fields if f.type == "table" and f.read_only
+        ],
         "tables": [
             {"name": f.name, "of": f.of} for f in e.fields if f.type == "table" and f.of
         ],

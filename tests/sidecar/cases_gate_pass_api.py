@@ -36,13 +36,16 @@ def users(db):
 
 
 def login(name):
-    client = APIClient()
+    client = APIClient(enforce_csrf_checks=True)
+    token = client.get("/api/auth/csrf/").json()["csrfToken"]
     resp = client.post(
         "/api/auth/login/",
         {"username": name, "password": "pw-" + name},
         format="json",
+        HTTP_X_CSRFTOKEN=token,
     )
     assert resp.status_code == 200, resp.content
+    client.credentials(HTTP_X_CSRFTOKEN=resp.json()["csrfToken"])
     return client
 
 
@@ -64,16 +67,34 @@ def test_unauthenticated_rejected(users):
     assert APIClient().get("/api/meta/").status_code in (401, 403)
 
 
+def test_login_requires_csrf_token(users):
+    client = APIClient(enforce_csrf_checks=True)
+    creds = {"username": "store1", "password": "pw-store1"}
+    assert client.post("/api/auth/login/", creds, format="json").status_code == 403
+    token = client.get("/api/auth/csrf/").json()["csrfToken"]
+    resp = client.post(
+        "/api/auth/login/", creds, format="json", HTTP_X_CSRFTOKEN="x" * 64
+    )
+    assert resp.status_code == 403
+    resp = client.post("/api/auth/login/", creds, format="json", HTTP_X_CSRFTOKEN=token)
+    assert resp.status_code == 200
+
+
 def test_login_logout(users):
-    client = APIClient()
+    client = APIClient(enforce_csrf_checks=True)
+    token = client.get("/api/auth/csrf/").json()["csrfToken"]
     bad = client.post(
-        "/api/auth/login/", {"username": "store1", "password": "no"}, format="json"
+        "/api/auth/login/",
+        {"username": "store1", "password": "no"},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
     )
     assert bad.status_code == 400
     good = client.post(
         "/api/auth/login/",
         {"username": "store1", "password": "pw-store1"},
         format="json",
+        HTTP_X_CSRFTOKEN=token,
     )
     assert good.status_code == 200
     body = good.json()
@@ -81,6 +102,7 @@ def test_login_logout(users):
     assert body["roles"] == ["store_user"]
     assert "csrftoken" in good.cookies
     assert client.get("/api/gate_pass/").status_code == 200
+    client.credentials(HTTP_X_CSRFTOKEN=body["csrfToken"])
     assert client.post("/api/auth/logout/").status_code == 200
     assert client.get("/api/gate_pass/").status_code in (401, 403)
     assert client.get("/api/auth/csrf/").status_code == 200
@@ -338,3 +360,65 @@ def test_sync_roles_creates_groups_idempotently(db):
     call_command("asb_sync_roles")
     names = set(Group.objects.values_list("name", flat=True))
     assert names == {"store_user", "security", "manager"}
+
+
+def test_patch_cannot_write_system_fields(users):
+    client = login("store1")
+    pk = make_pass(client)["id"]
+    resp = client.patch(
+        f"/api/gate_pass/{pk}/",
+        {"state": "approved", "number": "X-9", "created_by": "guard", "driver": "d2"},
+        format="json",
+    )
+    assert resp.status_code == 200
+    obj = GatePass.objects.get(pk=pk)
+    assert (obj.state, obj.driver, obj.created_by.username) == ("draft", "d2", "store1")
+    assert obj.number == make_number(pk)
+
+
+def make_number(pk):
+    return GatePass.objects.get(pk=pk).number
+
+
+def test_stale_update_cannot_undo_a_transition(users):
+    from api.serializers import build_serializer
+
+    store, guard = login("store1"), login("guard")
+    pk = make_pass(store)["id"]
+    stale = GatePass.objects.get(pk=pk)  # loaded while still a draft
+    act(store, pk, "submit")
+    act(guard, pk, "approve")
+    ser = build_serializer("gate_pass")(stale, data={"driver": "late"}, partial=True)
+    assert ser.is_valid(), ser.errors
+    ser.save()
+    obj = GatePass.objects.get(pk=pk)
+    assert obj.state == "approved"
+    assert obj.driver == "late"
+    last = TransitionLog.objects.filter(object_id=str(pk)).order_by("id").last()
+    assert last.to_state == obj.state
+    # and over HTTP the owner can no longer edit the now-approved pass
+    resp = store.patch(f"/api/gate_pass/{pk}/", {"driver": "x"}, format="json")
+    assert resp.status_code == 403
+    assert GatePass.objects.get(pk=pk).state == "approved"
+
+
+def test_user_without_edit_rights_cannot_change_rows_via_parent(users):
+    owner, other, boss = login("store1"), login("store2"), login("boss")
+    pk = make_pass(owner)["id"]
+    for client in (other, boss):
+        resp = client.patch(
+            f"/api/gate_pass/{pk}/",
+            {"lines": [{"item": "evil", "quantity": "9"}]},
+            format="json",
+        )
+        assert resp.status_code == 403
+    assert [r.item for r in GatePass.objects.get(pk=pk).lines.all()] == ["bolt"]
+
+
+def test_meta_actions_require_read(users):
+    from workflow.engine import available_actions
+
+    user = users["store1"]
+    assert available_actions(user, "gate_pass") == ["submit"]
+    Group.objects.get(name="store_user").user_set.remove(user)
+    assert available_actions(user, "gate_pass") == []

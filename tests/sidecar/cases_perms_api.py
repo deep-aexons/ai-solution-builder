@@ -19,13 +19,16 @@ def users(db):
 
 
 def login(name):
-    c = APIClient()
-    assert (
-        c.post(
-            "/api/auth/login/", {"username": name, "password": "pw"}, format="json"
-        ).status_code
-        == 200
+    c = APIClient(enforce_csrf_checks=True)
+    token = c.get("/api/auth/csrf/").json()["csrfToken"]
+    resp = c.post(
+        "/api/auth/login/",
+        {"username": name, "password": "pw"},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
     )
+    assert resp.status_code == 200, resp.content
+    c.credentials(HTTP_X_CSRFTOKEN=resp.json()["csrfToken"])
     return c
 
 
@@ -90,3 +93,25 @@ def test_entity_without_workflow(users):
     resp = ann.post(f"/api/note/{pk}/transition/", {"action": "x"}, format="json")
     assert resp.status_code == 400
     assert ann.delete(f"/api/note/{pk}/").status_code == 204
+
+
+def test_read_only_table_is_not_writable(users):
+    ann = login("ann")
+    resp = ann.post(
+        "/api/doc/",
+        {"title": "t", "items": [{"label": "x"}], "tags": [{"label": "a"}]},
+        format="json",
+    )
+    assert resp.status_code == 201, resp.content
+    body = resp.json()
+    assert body["items"] == []
+    assert [t["label"] for t in body["tags"]] == ["a"]
+    resp = ann.patch(
+        f"/api/doc/{body['id']}/", {"items": [{"label": "y"}]}, format="json"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+    meta = ann.get("/api/meta/").json()
+    doc = next(e for e in meta["entities"] if e["name"] == "doc")
+    fields = {f["name"]: f for f in doc["fields"]}
+    assert fields["items"]["read_only"] is True

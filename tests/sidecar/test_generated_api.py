@@ -25,7 +25,21 @@ MINI = {
             "fields": [
                 {"name": "title", "type": "text", "required": True},
                 {"name": "note", "type": "text"},
+                {"name": "items", "type": "table", "of": "doc_item", "read_only": True},
+                {"name": "tags", "type": "table", "of": "doc_tag"},
             ],
+        },
+        {
+            "name": "doc_item",
+            "label": "Doc Item",
+            "child_of": "doc",
+            "fields": [{"name": "label", "type": "text", "required": True}],
+        },
+        {
+            "name": "doc_tag",
+            "label": "Doc Tag",
+            "child_of": "doc",
+            "fields": [{"name": "label", "type": "text", "required": True}],
         },
         {
             "name": "note",
@@ -102,7 +116,9 @@ def _run_cases(solution: Solution, tmp_path: Path, cases: str) -> None:
         assert proc.returncode == 0, proc.stdout + proc.stderr
     shutil.copy(HERE / cases, backend / "test_generated_cases.py")
     proc = _pytest(backend, "test_generated_cases.py")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out
+    assert "warnings summary" not in out, out
 
 
 def test_gate_pass_api(tmp_path):
@@ -143,3 +159,14 @@ def test_route_clashing_entity_name_rejected(tmp_path):
     sol["entities"][1]["name"] = "meta"
     with pytest.raises(ValueError, match="reserved"):
         generate(Solution.model_validate(sol), tmp_path)
+
+
+def test_transition_log_admin_is_read_only(tmp_path):
+    generate(load_solution(FIXTURE), tmp_path)
+    admin = (tmp_path / "app/backend/entities/admin.py").read_text(encoding="utf-8")
+    for hook in (
+        "has_add_permission",
+        "has_change_permission",
+        "has_delete_permission",
+    ):
+        assert f"def {hook}" in admin

@@ -65,7 +65,14 @@ class _EntitySerializer(serializers.ModelSerializer):
     @transaction.atomic
     def update(self, instance, validated_data):
         tables = self._split(validated_data)
-        instance = super().update(instance, validated_data)
+        # Save only the fields this request changed, never state/number/created_by.
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        fields = list(validated_data)
+        if any(f.name == "modified_at" for f in instance._meta.get_fields()):
+            fields.append("modified_at")
+        if fields:
+            instance.save(update_fields=fields)
         _write_tables(self.entity, instance, tables)
         return instance
 
@@ -77,7 +84,8 @@ def build_serializer(entity):
     model = apps.get_model("entities", spec["model"])
     is_child = bool(spec["child_of"])
     declared = {
-        t["name"]: TableField(t["of"]) for t in spec["tables"]
+        t["name"]: TableField(t["of"], read_only=t["name"] in spec["read_only_tables"])
+        for t in spec["tables"]
     }
     fields = ["id"]
     read_only = ["id"]

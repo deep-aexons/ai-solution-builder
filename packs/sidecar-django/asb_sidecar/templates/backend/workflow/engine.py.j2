@@ -91,7 +91,10 @@ def available_actions(user, entity):
     if workflow is None:
         return []
     roles = user_roles(user)
-    can_approve = "approve" in user_perms(user, entity)
+    perms = user_perms(user, entity)
+    if "read" not in perms:
+        return []
+    can_approve = "approve" in perms
     out = []
     for t in workflow["transitions"]:
         ok = roles & set(t["roles"]) and (

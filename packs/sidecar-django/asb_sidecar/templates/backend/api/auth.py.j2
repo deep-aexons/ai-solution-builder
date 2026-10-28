@@ -4,6 +4,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -20,8 +21,16 @@ def _identity(request):
     }
 
 
+class CsrfOnlyAuthentication(SessionAuthentication):
+    """Authenticates nobody but always enforces the CSRF token (also for anonymous)."""
+
+    def authenticate(self, request):
+        self.enforce_csrf(request)
+        return None
+
+
 class LoginView(APIView):
-    authentication_classes = []
+    authentication_classes = [CsrfOnlyAuthentication]
     permission_classes = [AllowAny]
 
     def post(self, request):
