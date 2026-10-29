@@ -201,7 +201,7 @@ def test_hooks_json_registers_the_hook():
     entry = cfg["hooks"]["PreToolUse"][0]
     assert entry["matcher"] == "Write|Edit|MultiEdit|NotebookEdit|Bash"
     assert entry["hooks"][0]["command"] == (
-        "python3 ${CLAUDE_PLUGIN_ROOT}/core/policy/hook.py"
+        'python3 "${CLAUDE_PLUGIN_ROOT}/core/policy/hook.py"'
     )
 
 

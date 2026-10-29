@@ -2,6 +2,8 @@
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -55,11 +57,32 @@ def test_plugin_manifest_paths_exist():
     assert data["name"] == "ai-solution-builder"
     assert data["version"] == "0.1.0"
     assert data["author"]["name"] == "Aexons"
-    for key in ("skills", "agents", "commands", "hooks"):
-        path = ROOT / data[key]
-        assert path.exists(), f"plugin.json {key}: {data[key]} does not exist"
-    assert (ROOT / data["hooks"]).is_file()
-    json.loads((ROOT / data["hooks"]).read_text("utf-8"))
+    assert (ROOT / data["skills"]).is_dir()
+    assert (ROOT / data["commands"]).is_dir()
+    assert isinstance(data["agents"], list) and data["agents"]
+    for agent in data["agents"]:
+        assert agent.endswith(".md") and (ROOT / agent).is_file(), agent
+    # hooks/hooks.json is loaded by convention; an explicit field would load it twice
+    assert "hooks" not in data
+
+
+def test_hooks_file_registers_pretooluse():
+    cfg = json.loads((ROOT / "hooks" / "hooks.json").read_text("utf-8"))
+    entry = cfg["hooks"]["PreToolUse"][0]
+    assert "Bash" in entry["matcher"].split("|")
+    assert entry["hooks"][0]["type"] == "command"
+
+
+@pytest.mark.skipif(shutil.which("claude") is None, reason="claude CLI not installed")
+def test_claude_plugin_validate():
+    result = subprocess.run(
+        ["claude", "plugin", "validate", str(ROOT)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_marketplace_manifest():
@@ -79,7 +102,7 @@ def test_reviewer_agent():
     assert data["name"] == "asb-reviewer"
     assert str(data["description"]).strip()
     tools = {t.strip() for t in str(data["tools"]).split(",")}
-    assert tools == {"Read", "Grep", "Glob", "Bash"}
+    assert tools == {"Read", "Grep", "Glob", "Bash", "Write"}
     assert data["model"] == "inherit"
 
 

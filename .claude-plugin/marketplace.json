@@ -8,7 +8,9 @@
       "name": "ai-solution-builder",
       "source": "./",
       "description": "Six-stage, gated builder for business modules: requirements, discovery, design, build, verify, release runbook.",
-      "version": "0.1.0"
+      "version": "0.1.0",
+      "license": "Proprietary — Aexons"
     }
-  ]
+  ],
+  "description": "Aexons plugins for building, verifying and releasing business modules with AI."
 }

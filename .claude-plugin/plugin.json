@@ -6,7 +6,9 @@
     "name": "Aexons"
   },
   "skills": "./core/skills",
-  "agents": "./core/agents",
+  "agents": [
+    "./core/agents/asb-reviewer.md"
+  ],
   "commands": "./core/commands",
-  "hooks": "./hooks/hooks.json"
+  "license": "Proprietary — Aexons"
 }

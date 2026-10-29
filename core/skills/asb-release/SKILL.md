@@ -12,7 +12,7 @@ description: Use when a verified module is ready to go to the client, or someone
 ## Steps
 
 1. Confirm `asb status <name>` shows verify done and review the latest `verify-report.md` and `review.md`.
-2. Prepare a change summary for the client in `solutions/<name>/release/change-summary.md`: what the module does, roles, acceptance tests passed, known limitations and open risks (from `design-review.md` and `review.md`).
+2. No `asb` command creates the release folder: run `mkdir -p solutions/<name>/release` yourself. Prepare a change summary for the client in `solutions/<name>/release/change-summary.md`: what the module does, roles, acceptance tests passed, known limitations and open risks (from `design-review.md` and `review.md`).
 3. **UAT checklist** (the client runs it on a staging copy; record who, when, pass/fail per item):
    - each role can log in and sees only what it should,
    - every acceptance test scenario in `acceptance.md` is walked by a real user,
