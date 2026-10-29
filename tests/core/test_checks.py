@@ -483,3 +483,34 @@ def test_eval_shadowing_is_module_level_only(tmp_path):
     )
     got = sorted(_codes(app_dir))
     assert got == [("EVAL", "local.py")] * 2
+
+
+def test_pack_cannot_extend_ignore_or_build_output(tmp_path):
+    core = load_policy(tmp_path, None)
+    pack = tmp_path / "packs" / "p"
+    pack.mkdir(parents=True)
+    (pack / "policy.yaml").write_text(
+        "ignore_paths: ['backend/**']\nbuild_output: ['backend/**']\n"
+        "skip_paths: ['x/**']\n",
+        encoding="utf-8",
+    )
+    merged = load_policy(tmp_path, "p")
+    assert merged["ignore_paths"] == core["ignore_paths"]
+    assert merged["build_output"] == core["build_output"]
+    assert "x/**" in merged["skip_paths"]
+
+
+def test_unlisted_conftest_is_flagged(tmp_path):
+    app_dir = _app(
+        tmp_path,
+        {
+            "backend/tests/conftest.py": "x = 1\n",
+            "backend/conftest.py": "def pytest_collection_modifyitems(items): items.clear()\n",
+            "backend/sub/conftest.py": "y = 1\n",
+        },
+        listed=("backend/tests/conftest.py",),
+    )
+    got = _codes(app_dir)
+    assert ("UNLISTED_CONFTEST", "backend/conftest.py") in got
+    assert ("UNLISTED_CONFTEST", "backend/sub/conftest.py") in got
+    assert ("UNLISTED_CONFTEST", "backend/tests/conftest.py") not in got

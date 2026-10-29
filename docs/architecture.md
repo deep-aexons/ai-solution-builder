@@ -34,10 +34,10 @@ Stages: requirements, discovery, design, build, verify, release. `status.json` h
 |---|---|
 | design | a requirements approval exists |
 | build | a design approval exists and `design/solution.yaml` still hashes to the approved value |
-| verify | build is done and fewer than 3 verify rounds have run |
+| verify | build is done, `design/solution.yaml` still hashes to the latest approved value, and fewer than 3 verify rounds have run |
 | release | verify is done and a client approval exists |
 
-Approvals (`requirements`, `design`, `client`, `golive`) are recorded only by `asb approve`, run by a person. A new build resets the verify cycle. A failed discovery or verify never leaves its stage marked done.
+Approvals (`requirements`, `design`, `client`, `golive`) are recorded only by `asb approve`, run by a person. `status.json` also records `built_hash`, the design hash the last build used. A build always sets verify back to `todo`, but resets the 3-round counter only when the approved design differs from `built_hash` (a new design approval); rebuilding an unchanged design does not grant new rounds. `asb approve <name> design` runs the validator (with the pack's capabilities) and refuses a design with issues; an empty `--by` is refused. A failed discovery or verify never leaves its stage marked done.
 
 ## Ownership model
 
@@ -50,9 +50,9 @@ Generation writes `app/.asb-manifest.json` (SHA-256 of every generated file) and
 
 ## What `asb check` and `asb verify` do
 
-`asb check` is static: policy checks over the app. The names are `EVAL` (eval/exec), `RAW_SQL` (SQL built from strings), `SECRET` (hard-coded secrets), `NO_PERMISSION` (API views without permission classes; pack-configured) and `HEADER_TAMPERED` (a generated file edited, removed or unknown, or the manifest edited).
+`asb check` is static: policy checks over the app. The names are `EVAL` (eval/exec), `RAW_SQL` (SQL built from strings), `SECRET` (hard-coded secrets), `NO_PERMISSION` (API views without permission classes; pack-configured) `HEADER_TAMPERED` (a generated file edited, removed or unknown, or the manifest edited) and `UNLISTED_CONFTEST` (a `conftest.py` under `app/backend` that is not in the manifest). A pack's policy can only add to the deny lists, checks and `skip_paths`; it cannot extend `ignore_paths` or `build_output`.
 
-`asb verify` asks the pack to run all evidence and writes `verify-report.md`. For `sidecar-django`: acceptance mapping (every acceptance test has a passing test), the test suite, permission matrix, workflow matrix, reports, static checks, frontend build and a UI smoke walk through each role. A check that cannot run reports `skipped` with a reason and does not count as a pass. Any `fail` makes the run fail and sets verify back to `todo`.
+`asb verify` asks the pack to run all evidence and writes `verify-report.md`. For `sidecar-django`: acceptance mapping (every acceptance test has a passing test), the test suite, permission matrix, workflow matrix, reports, static checks, frontend build and a UI smoke walk through each role. A check that cannot run reports `skipped` with a reason in the report. Skips do not all behave alike: a skipped `frontend_build` or `ui_smoke` (no npm, no browser, registry unreachable) is reported but does not fail verify; a skipped acceptance test is never evidence for its acceptance test; a matrix case skipped as `sample-incomplete` fails its matrix check. The permission matrix, workflow matrix and reports checks also compare the executed cases with the cases the model implies (roles x entities x permissions, transitions x roles, one per report) and fail, listing them, when any is missing from the test run. Any `fail` makes the run fail and sets verify back to `todo`. The test run ignores `PYTEST_*` environment variables, and `asb check` flags any `conftest.py` under `app/backend` that the generator did not write (`UNLISTED_CONFTEST`).
 
 ## Guardrails
 

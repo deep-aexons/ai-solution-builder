@@ -39,7 +39,7 @@
   "backend/vendor/asb/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "backend/vendor/asb/connector.py": "24ad0d5434927d751b72af0973de59d9ee6fc3561959c36b715061630d061697",
   "backend/vendor/asb_erpnext/__init__.py": "abfddb442741d2388d015e74ad43ef0dbe62ce4790f2ce7a580e966eb95aaa5a",
-  "backend/vendor/asb_erpnext/client.py": "87bed0a8d07d8a33c7e8af70a0cd3ff653d26e27a24e8e3ac89719a79c8cec48",
+  "backend/vendor/asb_erpnext/client.py": "d40f86957398dcab0e38fac73d8a7ab59511624eb2c211491f72677f222b0a83",
   "backend/vendor/asb_erpnext/mapping.yaml": "01a148adb12d707a787f6c53f5ec2847ed7beb3ddc089005d3c6d371d4dff42a",
   "backend/workflow/__init__.py": "b364d85317099d5d1ba5d52acfe62c8e78c0ab8d29519f050e79b66232595468",
   "backend/workflow/definitions.py": "29a2bba28c89624fd11cf818274cc0fbe832d2da166ec1664e4e238cdbb9f427",

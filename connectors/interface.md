@@ -13,7 +13,7 @@ connector implements `asb.connector.Connector` and maps neutral kinds (for examp
 
 Signatures:
 
-- `inspect() -> dict`
+- `inspect() -> dict`: `{"version": str, "kinds": {kind: {"document": <system document name>, "fields": [names], "error"?: str}}}`
 - `get(kind: str, id: str) -> dict`
 - `list(kind: str, filters: dict | None = None, fields: list[str] | None = None, limit: int = 50) -> list[dict]`
 - `create_draft(kind: str, data: dict) -> dict`

@@ -98,3 +98,22 @@ def test_non_mapping_yaml(tmp_path):
     p.write_text("- a\n- b\n")
     with pytest.raises(ModelError):
         load_solution(p)
+
+
+def test_invalid_field_pattern_is_a_model_error(tmp_path):
+    p = _load_dict(
+        tmp_path, lambda d: d["entities"][0]["fields"][0].update(pattern="([")
+    )
+    with pytest.raises(ModelError) as exc:
+        load_solution(p)
+    assert any(
+        i.startswith("entities.0.fields.0.pattern:") and "regular expression" in i
+        for i in exc.value.issues
+    )
+
+
+def test_valid_field_pattern_loads(tmp_path):
+    p = _load_dict(
+        tmp_path, lambda d: d["entities"][0]["fields"][0].update(pattern=r"^GP-\d+$")
+    )
+    assert load_solution(p).entities[0].fields[0].pattern == r"^GP-\d+$"

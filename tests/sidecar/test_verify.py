@@ -343,10 +343,30 @@ def test_build_requires_design_approval(project):
 
 
 def test_build_rejects_invalid_model_without_generating(project):
+    from asb.status import Approval, load_status, save_status
+
     root, sol_dir = project
     bad = {**TINY, "acceptance_tests": []}
-    (sol_dir / "design" / "solution.yaml").write_text(yaml.safe_dump(bad))
-    approve_design(sol_dir)
+    target = sol_dir / "design" / "solution.yaml"
+    target.write_text(yaml.safe_dump(bad))
+    approve(sol_dir, "requirements", "t")
+    refused = cli(root, "approve", "ticketing", "design", "--by", "t")
+    assert refused.exit_code == 1 and "TRACE_RULE" in refused.output
+    assert load_status(sol_dir).approvals[-1].kind == "requirements"
+    # an approval recorded behind the CLI's back is still caught at build time
+    from asb.status import model_hash
+
+    st = load_status(sol_dir)
+    st.approvals.append(
+        Approval(
+            kind="design",
+            by="t",
+            at=load_status(sol_dir).approvals[0].at,
+            model_version="1",
+            model_hash=model_hash(target),
+        )
+    )
+    save_status(sol_dir, st)
     result = cli(root, "build", "ticketing")
     assert result.exit_code == 1 and "TRACE_RULE" in result.output
     assert not (sol_dir / "app").exists()
@@ -396,11 +416,45 @@ def test_build_then_three_verifies_then_gate(project):
     log = (sol_dir / "audit.log").read_text()
     assert "round=1 result=fail" in log and "round=2 result=pass" in log
 
-    rebuilt = cli(root, "build", "ticketing")  # new build -> new verify cycle
+    rebuilt = cli(root, "build", "ticketing")  # same design: the cap is not reset
     assert rebuilt.exit_code == 0, rebuilt.output
     st = load_status(sol_dir)
-    assert st.verify_rounds == 0 and st.stages["verify"] == "todo"
+    assert st.verify_rounds == 3 and st.stages["verify"] == "todo"
     assert "kept" in rebuilt.output  # AI-owned files survive
+    still = cli(root, "verify", "ticketing")
+    assert still.exit_code == 1 and "fix-loop limit" in still.output
+    assert load_status(sol_dir).verify_rounds == 3
+
+    path = sol_dir / "design" / "solution.yaml"  # a new approved design resets it
+    path.write_text(path.read_text(encoding="utf-8") + "\n# v2\n", encoding="utf-8")
+    approve(sol_dir, "design", "t")
+    assert cli(root, "build", "ticketing").exit_code == 0
+    st = load_status(sol_dir)
+    assert st.verify_rounds == 0 and st.stages["verify"] == "todo"
+
+
+def test_verify_refused_when_design_edited_after_build(project):
+    root, sol_dir = project
+    approve_design(sol_dir)
+    assert cli(root, "build", "ticketing").exit_code == 0
+    path = sol_dir / "design" / "solution.yaml"
+    path.write_text(path.read_text(encoding="utf-8") + "\n# sneaky\n")
+    result = cli(root, "verify", "ticketing")
+    assert result.exit_code == 1 and "approved hash differs" in result.output
+    assert load_status(sol_dir).verify_rounds == 0
+
+
+def test_report_write_failure_is_a_clean_error(project, monkeypatch):
+    root, sol_dir = project
+    approve_design(sol_dir)
+    assert cli(root, "build", "ticketing").exit_code == 0
+    (sol_dir / "verify-report.md").mkdir()  # cannot be written as a file
+    result = cli(root, "verify", "ticketing")
+    assert result.exit_code == 1
+    assert "cannot write verify-report.md" in result.output
+    assert "Traceback" not in result.output
+    st = load_status(sol_dir)
+    assert st.stages["verify"] == "todo" and st.verify_rounds == 1
 
 
 def test_failed_round_after_a_pass_blocks_release(project):
@@ -422,3 +476,56 @@ def test_failed_round_after_a_pass_blocks_release(project):
     assert st.verify_rounds == 3 and st.stages["verify"] == "todo"
     with pytest.raises(GateError):
         require(sol_dir, "release")
+
+
+# matrix evidence completeness ----------------------------------------------------------------
+
+
+def test_deselected_matrix_cases_fail(tmp_path, no_frontend):
+    sol, sol_dir, root = _tiny(tmp_path)
+    conftest = sol_dir / "app/backend/tests/conftest.py"
+    conftest.write_text(
+        conftest.read_text(encoding="utf-8")
+        + "\n\ndef pytest_collection_modifyitems(config, items):\n"
+        "    items[:] = [i for i in items if not i.name.startswith(('test_permission[worker-ticket-delete]',"
+        " 'test_transition_by_role[ticket.finish', 'test_report_runs'))]\n",
+        encoding="utf-8",
+    )
+    got = by_name(verify(sol, sol_dir, root=root))
+    assert got["permission_matrix"].status == "fail"
+    assert "test_permission[worker-ticket-delete]" in got["permission_matrix"].details
+    assert got["workflow_matrix"].status == "fail"
+    assert "ticket.finish.review-to-done" in got["workflow_matrix"].details
+    assert got["reports"].status == "fail"
+    assert "test_report_runs[ticket_list]" in got["reports"].details
+    assert got["static"].status == "fail" and "HEADER_TAMPERED" in got["static"].details
+
+
+def test_expected_cases_come_from_the_model():
+    sol = parse_solution(yaml.safe_dump(TINY).encode(), Path("t.yaml"))
+    want = verify_mod.expected_cases(sol)
+    assert len(want["permission_matrix"]) == 2 * 1 * 7 + 2 * 1  # + report access
+    assert "test_permission[reviewer-ticket-export]" in want["permission_matrix"]
+    assert len(want["workflow_matrix"]) == 2 * 2
+    assert (
+        "test_transition_by_role[ticket.submit.draft-to-review-worker]"
+        in (want["workflow_matrix"])
+    )
+    assert want["reports"] == ["test_report_runs[ticket_list]"]
+
+
+def test_pytest_env_vars_cannot_steer_the_run(tmp_path, no_frontend, monkeypatch):
+    sol, sol_dir, root = _tiny(tmp_path)
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k no_such_test_anywhere")
+    monkeypatch.setenv("PYTEST_PLUGINS", "no_such_plugin_module")
+    got = by_name(verify(sol, sol_dir, root=root))
+    for name in ("acceptance_mapping", "tests", "permission_matrix", "workflow_matrix"):
+        assert got[name].status == "pass", (name, got[name].details)
+
+
+def test_unlisted_conftest_fails_static(tmp_path, no_frontend):
+    sol, sol_dir, root = _tiny(tmp_path)
+    (sol_dir / "app/backend/conftest.py").write_text("# sneaky\n", encoding="utf-8")
+    got = by_name(verify(sol, sol_dir, root=root))
+    assert got["static"].status == "fail"
+    assert "UNLISTED_CONFTEST" in got["static"].details

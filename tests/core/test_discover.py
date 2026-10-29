@@ -46,7 +46,7 @@ def test_fake_is_connector():
 
 
 def test_all_kinds_ok_no_gaps():
-    conn = FakeConnector(kinds={"item": {"doctype": "Thing", "fields": ["a", "b"]}})
+    conn = FakeConnector(kinds={"item": {"document": "Thing", "fields": ["a", "b"]}})
     md = discover(_solution([("item", "item", "read")]), conn)
     assert md.startswith("# Discovery — demo")
     assert "v1.2" in md
@@ -65,8 +65,8 @@ def test_missing_kind_is_gap():
 def test_inspect_kind_error_and_zero_fields_are_gaps():
     conn = FakeConnector(
         kinds={
-            "a": {"doctype": "A", "fields": [], "error": "boom"},
-            "b": {"doctype": "B", "fields": []},
+            "a": {"document": "A", "fields": [], "error": "boom"},
+            "b": {"document": "B", "fields": []},
         }
     )
     md = discover(_solution([("a", "a", "read"), ("b", "b", "read")]), conn)
@@ -76,7 +76,7 @@ def test_inspect_kind_error_and_zero_fields_are_gaps():
 
 def test_list_error_is_gap_not_raised():
     conn = FakeConnector(
-        kinds={"item": {"doctype": "Thing", "fields": ["a"]}},
+        kinds={"item": {"document": "Thing", "fields": ["a"]}},
         list_exc={"item": ConnectorError("denied")},
     )
     md = discover(_solution([("item", "item", "read")]), conn)
@@ -84,7 +84,7 @@ def test_list_error_is_gap_not_raised():
 
 
 def test_write_access_listed():
-    conn = FakeConnector(kinds={"item": {"doctype": "Thing", "fields": ["a"]}})
+    conn = FakeConnector(kinds={"item": {"document": "Thing", "fields": ["a"]}})
     md = discover(_solution([("item", "item", "write:create_item")]), conn)
     section = md.split("## Write access requested")[1].split("## Gaps")[0]
     assert "item" in section and "write:create_item" in section
@@ -111,7 +111,7 @@ class FakeConn:
             raise AuthFailed("rejected")
         if os.environ.get("FAKE_MALFORMED"):
             return ["nope"]
-        return {"version": "9.9", "kinds": {"item": {"doctype": "Thing", "fields": ["x"]}}}
+        return {"version": "9.9", "kinds": {"item": {"document": "Thing", "fields": ["x"]}}}
     def get(self, kind, id):
         return {}
     def list(self, kind, filters=None, fields=None, limit=50):
@@ -195,7 +195,7 @@ def test_non_connector_exceptions_do_not_escape():
         def list(self, kind, filters=None, fields=None, limit=50):
             raise KeyError("zzz")
 
-    conn = Boom(kinds={"item": {"doctype": "T", "fields": ["a"]}})
+    conn = Boom(kinds={"item": {"document": "T", "fields": ["a"]}})
     md = discover(_solution([("item", "item", "read")]), conn)
     assert "gap: list failed: KeyError" in md
 
@@ -211,7 +211,7 @@ def test_non_connector_exceptions_do_not_escape():
 def test_malformed_inspect_results():
     md = discover(_solution([("a", "a", "read")]), FakeConnector(kinds=["x"]))
     assert "gap: kind not found" in md
-    conn = FakeConnector(kinds={"a": "str", "b": {"doctype": "B", "fields": 5}})
+    conn = FakeConnector(kinds={"a": "str", "b": {"document": "B", "fields": 5}})
     md = discover(_solution([("a", "a", "read"), ("b", "b", "read")]), conn)
     assert "gap: malformed inspect entry" in md
     assert "gap: malformed fields" in md
@@ -234,7 +234,7 @@ def test_no_connector_no_error_guard():
 def test_markdown_injection_neutralised():
     evil = "1.0\n## Gaps\n- fake `x` \\ y"
     conn = FakeConnector(
-        version=evil, kinds={"item": {"doctype": "T`|\n# H", "fields": ["a"]}}
+        version=evil, kinds={"item": {"document": "T`|\n# H", "fields": ["a"]}}
     )
     md = discover(_solution([("item", "item", "read")]), conn)
     assert md.count("\n## Gaps") == 1

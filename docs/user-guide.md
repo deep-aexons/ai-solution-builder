@@ -11,6 +11,8 @@ uv sync
 uv run asb --help
 ```
 
+`asb build` and `asb verify` run the generated app's tests with the packages that `uv sync` installs (Django, Django REST framework, pytest-django, Playwright), so run them from this repository's environment; standalone packaging is SP3.
+
 In Claude Code, install the plugin (see the README). Anywhere below, `asb status gate-pass` shows where you are and `asb gate gate-pass <stage>` says whether a stage may start.
 
 ## 1. Start the solution
@@ -79,7 +81,7 @@ uv run asb check gate-pass
 uv run asb verify gate-pass
 ```
 
-This writes `verify-report.md`. For Gate Pass round 1: acceptance mapping (6 tests mapped), tests, permission matrix, workflow matrix, reports, static checks, frontend build and UI smoke all pass. If something fails, Claude fixes it and you run verify again; after 3 rounds the gate stops the loop and a person decides. After a pass, Claude dispatches the `asb-reviewer` agent, which writes `review.md` with findings by severity. The review is advice; you decide.
+This writes `verify-report.md`. For Gate Pass round 1: acceptance mapping (6 tests mapped), tests, permission matrix, workflow matrix, reports, static checks, frontend build and UI smoke all pass. If something fails, Claude fixes it and you run verify again; after 3 rounds the gate stops the loop and a person decides. Rebuilding the same approved design does not give new rounds; only a newly approved design does. After a pass, Claude dispatches the `asb-reviewer` agent, which writes `review.md` with findings by severity. The review is advice; you decide.
 
 ## 7. Release (manual)
 

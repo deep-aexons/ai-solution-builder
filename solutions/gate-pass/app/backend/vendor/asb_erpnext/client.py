@@ -173,11 +173,11 @@ class ERPNextConnector:
                     params={"doctype": doctype},
                 )
                 fields = [f["fieldname"] for f in body["message"]["docs"][0]["fields"]]
-                kinds[kind] = {"doctype": doctype, "fields": fields}
+                kinds[kind] = {"document": doctype, "fields": fields}
             except AuthFailed:
                 raise
             except (ConnectorError, KeyError, IndexError, TypeError) as exc:
-                kinds[kind] = {"doctype": doctype, "fields": [], "error": str(exc)}
+                kinds[kind] = {"document": doctype, "fields": [], "error": str(exc)}
         return {"version": version, "kinds": kinds}
 
     def get(self, kind: str, id: str) -> dict[str, Any]:

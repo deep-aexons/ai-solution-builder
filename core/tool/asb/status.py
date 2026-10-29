@@ -16,6 +16,7 @@ from typing import Literal, get_args
 from pydantic import BaseModel, ValidationError
 
 from asb.model import ModelError, parse_solution
+from asb.validate import validate
 
 STAGES = ["requirements", "discovery", "design", "build", "verify", "release"]
 MAX_VERIFY_ROUNDS = 3
@@ -44,6 +45,7 @@ class Status(BaseModel):
     stages: dict[str, Literal["todo", "done"]]
     approvals: list[Approval] = []
     verify_rounds: int = 0
+    built_hash: str | None = None  # design hash the last build used
 
 
 def _now() -> datetime:
@@ -166,17 +168,35 @@ def increment_verify_rounds(sol_dir: Path) -> int:
     return st.verify_rounds
 
 
-def reset_verify(sol_dir: Path) -> None:
-    """A new build starts a new verify cycle: rounds back to 0, verify stage to todo."""
+def record_build(sol_dir: Path) -> None:
+    """Record a finished build: verify goes back to todo.
+
+    The fix-loop counter only resets when the design differs from the one the previous
+    build used (a new design approval); rebuilding the same design keeps the rounds.
+    """
+    sol_dir = Path(sol_dir)
     st = load_status(sol_dir)
-    st.verify_rounds = 0
+    digest = model_hash(sol_dir / "design" / "solution.yaml")
+    new_design = st.built_hash != digest
+    if new_design:
+        st.verify_rounds = 0
+    st.built_hash = digest
     st.stages["verify"] = "todo"
     save_status(sol_dir, st)
-    log_event(sol_dir, "verify_reset", "new build")
+    log_event(
+        sol_dir,
+        "verify_reset" if new_design else "verify_kept",
+        f"build hash={digest}",
+    )
 
 
-def approve(sol_dir: Path, kind: str, by: str) -> Approval:
+def approve(
+    sol_dir: Path, kind: str, by: str, capabilities: dict | None = None
+) -> Approval:
     sol_dir = Path(sol_dir)
+    by = by.strip() if isinstance(by, str) else ""
+    if not by:
+        raise ValueError("--by must name who approves (not empty)")
     if kind not in APPROVAL_KINDS:
         raise ValueError(
             f"unknown approval kind '{kind}'; allowed: {', '.join(APPROVAL_KINDS)}"
@@ -195,6 +215,13 @@ def approve(sol_dir: Path, kind: str, by: str) -> Approval:
                 sol_dir,
                 "approve design",
                 "design/solution.yaml is invalid: " + "; ".join(exc.issues),
+            )
+        issues = validate(sol, capabilities)
+        if issues:
+            _fail(
+                sol_dir,
+                "approve design",
+                "design has validation issues: " + "; ".join(map(str, issues)),
             )
         version = str(sol.version)
         digest = hashlib.sha256(raw).hexdigest()
@@ -228,6 +255,15 @@ def _latest(st: Status, kind: str) -> Approval | None:
     return found[-1] if found else None
 
 
+def _require_current_design(st: Status, sol_dir: Path, fail) -> None:
+    approval = _latest(st, "design")
+    if approval is None:
+        fail("design not approved")
+    path = sol_dir / "design" / "solution.yaml"
+    if not path.is_file() or model_hash(path) != approval.model_hash:
+        fail("design changed since approval: approved hash differs; re-approve")
+
+
 def require(sol_dir: Path, stage: str) -> None:
     """Raise GateError unless `stage` may start."""
     sol_dir = Path(sol_dir)
@@ -242,15 +278,11 @@ def require(sol_dir: Path, stage: str) -> None:
         if _latest(st, "requirements") is None:
             fail("requirements not approved")
     elif stage == "build":
-        approval = _latest(st, "design")
-        if approval is None:
-            fail("design not approved")
-        path = sol_dir / "design" / "solution.yaml"
-        if not path.is_file() or model_hash(path) != approval.model_hash:
-            fail("design changed since approval: approved hash differs; re-approve")
+        _require_current_design(st, sol_dir, fail)
     elif stage == "verify":
         if st.stages.get("build") != "done":
             fail("build not done")
+        _require_current_design(st, sol_dir, fail)
         if st.verify_rounds >= MAX_VERIFY_ROUNDS:
             fail(
                 f"fix-loop limit reached ({MAX_VERIFY_ROUNDS} rounds); "

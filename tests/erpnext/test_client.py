@@ -227,7 +227,7 @@ def test_inspect():
 
     out = make(h).inspect()
     assert out["version"] == "15.1.0"
-    assert out["kinds"]["item"] == {"doctype": "Item", "fields": ["a", "b"]}
+    assert out["kinds"]["item"] == {"document": "Item", "fields": ["a", "b"]}
     assert out["kinds"]["customer"]["fields"] == []
     assert "error" in out["kinds"]["customer"]
 

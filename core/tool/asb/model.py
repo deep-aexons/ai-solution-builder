@@ -62,6 +62,20 @@ class Field(_Base):
     to: list[Name] | None = None
     of: Name | None = None
 
+    @field_validator("pattern", mode="after")
+    @classmethod
+    def _pattern_compiles(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                re.compile(v)
+            except re.error as exc:
+                raise PydanticCustomError(
+                    "pattern",
+                    "pattern is not a valid regular expression: {err}",
+                    {"err": str(exc)},
+                ) from exc
+        return v
+
 
 class Entity(_Base):
     name: Name

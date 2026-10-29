@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from asb.checks import load_policy, read_anchor, run_checks
-from asb.model import Solution
+from asb.model import PERMISSIONS, Solution
 from asb.plugins import CheckResult, VerifyResult
 from asb.status import load_status
 
@@ -279,7 +279,40 @@ def check_tests(run: PytestRun) -> CheckResult:
     return CheckResult("tests", "pass", _counts(cases))
 
 
-def check_matrix(name: str, run: PytestRun, expected: bool) -> CheckResult:
+def expected_cases(solution: Solution) -> dict[str, list[str]]:
+    """Test names the generated matrix files must contain, computed from the model."""
+    top = [e.name for e in solution.entities if not e.child_of]
+    roles = sorted(
+        {
+            *solution.roles,
+            *(r for w in solution.workflows for t in w.transitions for r in t.roles),
+        }
+    )
+    reports = [r.name for r in solution.reports]
+    permission = [
+        f"test_permission[{r}-{e}-{p}]" for r in roles for e in top for p in PERMISSIONS
+    ]
+    permission += [f"test_report_access[{r}-{rep}]" for r in roles for rep in reports]
+    workflow = [
+        f"test_transition_by_role[{w.entity}.{t.action}.{t.from_}-to-{t.to}-{r}]"
+        for w in solution.workflows
+        if w.entity in top
+        for t in w.transitions
+        for r in roles
+    ]
+    return {
+        "permission_matrix": permission,
+        "workflow_matrix": workflow,
+        "reports": [f"test_report_runs[{rep}]" for rep in reports],
+    }
+
+
+def check_matrix(
+    name: str,
+    run: PytestRun,
+    expected: bool,
+    expected_ids: list[str] | None = None,
+) -> CheckResult:
     if not expected:
         reason = {
             "permission_matrix": "no entities",
@@ -305,6 +338,16 @@ def check_matrix(name: str, run: PytestRun, expected: bool) -> CheckResult:
     ]
     executed = sum(1 for c in cases if c.outcome == "passed")
     lines: list[str] = []
+    present = {c.name for c in cases}
+    missing = [i for i in (expected_ids or []) if i not in present]
+    if missing:
+        shown = ", ".join(missing[:20]) + (
+            f", ... and {len(missing) - 20} more" if len(missing) > 20 else ""
+        )
+        lines.append(
+            f"{len(missing)} expected case(s) missing from the test run "
+            f"(deselected or removed): {shown}"
+        )
     if bad:
         lines.append("failures:\n" + _describe_failures(bad))
     if incomplete:
@@ -456,6 +499,7 @@ def verify(
         run = PytestRun(None, f"{type(exc).__name__}: {exc}", junit_ok=False)
     top = {e.name for e in solution.entities if not e.child_of}
     has_transitions = any(w.entity in top and w.transitions for w in solution.workflows)
+    want = expected_cases(solution)
     results = [
         _guard(
             "acceptance_mapping",
@@ -464,13 +508,22 @@ def verify(
         _guard("tests", lambda: check_tests(run)),
         _guard(
             "permission_matrix",
-            lambda: check_matrix("permission_matrix", run, bool(top)),
+            lambda: check_matrix(
+                "permission_matrix", run, bool(top), want["permission_matrix"]
+            ),
         ),
         _guard(
             "workflow_matrix",
-            lambda: check_matrix("workflow_matrix", run, has_transitions),
+            lambda: check_matrix(
+                "workflow_matrix", run, has_transitions, want["workflow_matrix"]
+            ),
         ),
-        _guard("reports", lambda: check_matrix("reports", run, bool(solution.reports))),
+        _guard(
+            "reports",
+            lambda: check_matrix(
+                "reports", run, bool(solution.reports), want["reports"]
+            ),
+        ),
         _guard("static", lambda: check_static(solution_dir, base)),
     ]
     build = _guard("frontend_build", lambda: check_frontend_build(app))

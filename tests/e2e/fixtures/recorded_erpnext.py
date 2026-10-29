@@ -25,11 +25,11 @@ PURCHASE_RECEIPT_FIELDS = [
 
 KINDS: dict[str, Any] = {
     "outbound_shipment": {
-        "doctype": "Delivery Note",
+        "document": "Delivery Note",
         "fields": DELIVERY_NOTE_FIELDS,
     },
     "inbound_receipt": {
-        "doctype": "Purchase Receipt",
+        "document": "Purchase Receipt",
         "fields": PURCHASE_RECEIPT_FIELDS,
     },
 }

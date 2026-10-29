@@ -13,6 +13,7 @@ from asb.status import (
     load_status,
     mark_done,
     new_solution,
+    record_build,
     require,
     save_status,
 )
@@ -99,6 +100,8 @@ def test_latest_design_approval_counts(sol):
 def test_verify_and_release_gates(sol):
     with pytest.raises(GateError):
         require(sol, "verify")
+    put_model(sol)
+    approve(sol, "design", "Deep")
     mark_done(sol, "build")
     require(sol, "verify")
     with pytest.raises(GateError):
@@ -111,6 +114,8 @@ def test_verify_and_release_gates(sol):
 
 
 def test_fix_loop_limit(sol):
+    put_model(sol)
+    approve(sol, "design", "Deep")
     mark_done(sol, "build")
     st = load_status(sol)
     st.verify_rounds = 3
@@ -141,6 +146,7 @@ def test_audit_log_written(sol):
 
 
 def test_cli_flow(tmp_path):
+    (tmp_path / "packs").symlink_to(FIX.parents[1] / "packs")
     r = CliRunner()
     root = ["--root", str(tmp_path)]
     res = r.invoke(
@@ -239,3 +245,100 @@ def test_approving_requirements_or_design_marks_the_stage_done(sol):
     assert st.stages["build"] == "todo" and st.stages["release"] == "todo"
     approve(sol, "client", "Deep")
     assert load_status(sol).stages["release"] == "todo"
+
+
+def test_verify_refused_after_design_edit(sol):
+    target = put_model(sol)
+    approve(sol, "design", "Deep")
+    mark_done(sol, "build")
+    require(sol, "verify")
+    target.write_text(target.read_text() + "\n# edited after build\n")
+    with pytest.raises(GateError, match="approved hash differs"):
+        require(sol, "verify")
+
+
+def test_rebuild_same_design_keeps_rounds(sol):
+    put_model(sol)
+    approve(sol, "design", "Deep")
+    mark_done(sol, "build")
+    record_build(sol)
+    for _ in range(3):
+        require(sol, "verify")
+        increment_verify_rounds(sol)
+    mark_done(sol, "verify")
+    record_build(sol)  # same design again
+    st = load_status(sol)
+    assert st.verify_rounds == 3 and st.stages["verify"] == "todo"
+    with pytest.raises(GateError, match="fix-loop limit reached"):
+        require(sol, "verify")
+
+
+def test_new_approved_design_resets_rounds(sol):
+    target = put_model(sol)
+    approve(sol, "design", "Deep")
+    mark_done(sol, "build")
+    record_build(sol)
+    for _ in range(3):
+        increment_verify_rounds(sol)
+    target.write_text(target.read_text() + "\n# v2\n")
+    approve(sol, "design", "Deep")
+    record_build(sol)
+    st = load_status(sol)
+    assert st.verify_rounds == 0 and st.stages["verify"] == "todo"
+    require(sol, "verify")
+
+
+def test_status_without_built_hash_still_loads(sol):
+    import json
+
+    path = sol / "status.json"
+    data = json.loads(path.read_text())
+    data.pop("built_hash", None)
+    path.write_text(json.dumps(data))
+    assert load_status(sol).built_hash is None
+
+
+@pytest.mark.parametrize("by", ["", "   ", "\t\n"])
+def test_approve_rejects_empty_by(sol, by):
+    with pytest.raises(ValueError, match="--by"):
+        approve(sol, "requirements", by)
+    assert load_status(sol).approvals == []
+
+
+def test_cli_approve_rejects_empty_by(tmp_path):
+    new_solution(tmp_path, "gate-pass", "sidecar-django", "erpnext")
+    res = CliRunner().invoke(
+        app,
+        ["approve", "gate-pass", "requirements", "--by", "  ", "--root", str(tmp_path)],
+    )
+    assert res.exit_code == 1 and "error:" in res.output and "--by" in res.output
+    assert "Traceback" not in res.output
+
+
+def test_approve_design_runs_validator(sol):
+    (sol / "design" / "solution.yaml").write_text(
+        (FIX / "gate_pass.yaml").read_text().split("acceptance_tests:")[0]
+        + "acceptance_tests: []\n"
+    )
+    with pytest.raises(GateError, match="TRACE_RULE"):
+        approve(sol, "design", "Deep")
+    assert load_status(sol).approvals == []
+
+
+def test_cli_approve_design_uses_pack_capabilities(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import asb.cli
+
+    monkeypatch.setattr(
+        asb.cli,
+        "load_pack",
+        lambda root, name: SimpleNamespace(capabilities={"workflow": False}),
+    )
+    d = new_solution(tmp_path, "gate-pass", "sidecar-django", "erpnext")
+    put_model(d)
+    res = CliRunner().invoke(
+        app, ["approve", "gate-pass", "design", "--by", "Deep", "--root", str(tmp_path)]
+    )
+    assert res.exit_code == 1 and "CAPABILITY" in res.output
+    assert load_status(d).approvals == []

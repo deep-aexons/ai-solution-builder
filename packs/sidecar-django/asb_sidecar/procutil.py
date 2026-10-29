@@ -20,11 +20,11 @@ _DROP_ENV = (
 
 
 def clean_env(**extra: str) -> dict[str, str]:
-    """The caller's environment without anything that changes the app's settings."""
+    """The caller's environment without anything that changes the app's settings or its test run (PYTEST_*)."""
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in _DROP_ENV and not k.startswith("ASB_ERP_")
+        if k not in _DROP_ENV and not k.startswith(("ASB_ERP_", "PYTEST_"))
     }
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.update(extra)

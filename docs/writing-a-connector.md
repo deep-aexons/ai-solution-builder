@@ -29,7 +29,7 @@ Implement `asb.connector.Connector` (a `typing.Protocol`):
 
 | Method | Contract |
 |---|---|
-| `inspect() -> dict` | `{"version": str, "kinds": {kind: {"doctype": <system name>, "fields": [names], "error"?: str}}}`. Discovery builds `discovery.md` from this; a kind with `error` or no fields becomes a gap |
+| `inspect() -> dict` | `{"version": str, "kinds": {kind: {"document": <system name>, "fields": [names], "error"?: str}}}`. Discovery builds `discovery.md` from this; a kind with `error` or no fields becomes a gap |
 | `get(kind, id) -> dict` | One record. Raise `NotFound` if absent |
 | `list(kind, filters=None, fields=None, limit=50) -> list[dict]` | Live read |
 | `create_draft(kind, data) -> dict` | Create a draft only, and only for operations in `allowed_writes` |

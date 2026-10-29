@@ -80,7 +80,7 @@ def run_discovery(
             elif not isinstance(entry, dict):
                 reason = f"malformed inspect entry ({type(entry).__name__})"
             else:
-                doc = entry.get("doctype") or "—"
+                doc = entry.get("document") or "—"
                 flist = entry.get("fields", [])
                 try:
                     fields = str(len(flist))

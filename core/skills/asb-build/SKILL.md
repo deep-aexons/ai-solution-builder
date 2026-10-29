@@ -28,7 +28,7 @@ description: Use when the design is approved and the client wants the module bui
 
 ## Gate
 
-`asb check <name>` passes. Rebuilding resets the verify cycle (rounds back to 0).
+`asb check <name>` passes. Every build sets verify back to `todo`, but the 3-round fix-loop counter resets only when the human approves a changed design (the approved design hash differs from the one the previous build used). Rebuilding an unchanged design keeps the rounds.
 
 ## Boundaries
 

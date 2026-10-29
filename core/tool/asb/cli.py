@@ -23,8 +23,8 @@ from asb.status import (
     mark_done,
     mark_todo,
     new_solution,
+    record_build,
     require,
-    reset_verify,
     set_active,
     valid_name,
 )
@@ -172,9 +172,15 @@ def approve_cmd(
     root: RootOpt = None,  # type: ignore[assignment]
 ) -> None:
     """Record an approval."""
+    sol_dir = _sol_dir(root, name)
     try:
-        approve(_sol_dir(root, name), kind, by)
-    except (GateError, ValueError) as exc:
+        capabilities = None
+        if kind == "design":
+            capabilities = load_pack(
+                _base(root), load_status(sol_dir).pack
+            ).capabilities
+        approve(sol_dir, kind, by, capabilities)
+    except (GateError, ValueError, FileNotFoundError, ImportError) as exc:
         typer.echo(f"error: {exc}")
         raise typer.Exit(1) from exc
     typer.echo(f"approved {kind} by {by}")
@@ -293,7 +299,7 @@ def build_cmd(
         log_event(sol_dir, "build_failed", type(exc).__name__)
         raise typer.Exit(1) from exc
     mark_done(sol_dir, "build")
-    reset_verify(sol_dir)
+    record_build(sol_dir)
     set_active(base, name)
     log_event(
         sol_dir,
@@ -339,9 +345,15 @@ def verify_cmd(
         log_event(sol_dir, "verify_failed", f"round={round_no} {type(exc).__name__}")
         mark_todo(sol_dir, "verify")
         raise typer.Exit(1) from exc
-    (sol_dir / "verify-report.md").write_text(
-        render_report(name, round_no, result), encoding="utf-8"
-    )
+    try:
+        (sol_dir / "verify-report.md").write_text(
+            render_report(name, round_no, result), encoding="utf-8"
+        )
+    except OSError as exc:
+        typer.echo(f"error: cannot write verify-report.md: {exc}")
+        log_event(sol_dir, "verify_failed", f"round={round_no} report write failed")
+        mark_todo(sol_dir, "verify")
+        raise typer.Exit(1) from exc
     ok = passed(result)
     n_fail = sum(1 for c in result.checks if c.status == "fail")
     n_pass = sum(1 for c in result.checks if c.status == "pass")

@@ -23,6 +23,8 @@ When a client's ERP lacks a function, a traditional build is slow and hard to au
 
 Prerequisites: Python 3.11 or later and [uv](https://docs.astral.sh/uv/). For a full verify you also want Node (`npm`, for the frontend build); Docker is needed only to run a generated app with Compose. Missing tools make the matching check report `skipped` with a reason.
 
+`asb build` and `asb verify` run the generated app's tests, so they need this repository's `uv sync` development environment (Django, Django REST framework, pytest-django, Playwright). Packaging `asb` as a standalone install is planned for SP3.
+
 ```sh
 uv sync
 uv run asb --help
