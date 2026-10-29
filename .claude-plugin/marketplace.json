@@ -1,0 +1,14 @@
+{
+  "name": "aexons-asb",
+  "owner": {
+    "name": "Aexons"
+  },
+  "plugins": [
+    {
+      "name": "ai-solution-builder",
+      "source": "./",
+      "description": "Six-stage, gated builder for business modules: requirements, discovery, design, build, verify, release runbook.",
+      "version": "0.1.0"
+    }
+  ]
+}

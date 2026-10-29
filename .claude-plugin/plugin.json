@@ -1,0 +1,12 @@
+{
+  "name": "ai-solution-builder",
+  "version": "0.1.0",
+  "description": "Turn a plain-language business request into a reviewed, tested module through six gated stages, driven by the asb CLI.",
+  "author": {
+    "name": "Aexons"
+  },
+  "skills": "./core/skills",
+  "agents": "./core/agents",
+  "commands": "./core/commands",
+  "hooks": "./hooks/hooks.json"
+}
